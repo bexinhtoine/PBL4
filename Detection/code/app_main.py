@@ -5,17 +5,18 @@ import os
 # --- Import các file code của bạn ---
 import database
 import login # Import file login.py (chứa LoginFrame)
-import camera
 
-# --- IMPORT MỚI ---
-# Import class App (giao diện camera) từ file camera.py
+# --- IMPORT CÁC GIAO DIỆN MỚI ---
 try:
-    from camera import Camera
+    from home import HomeFrame
+    from lichsu import LichSuFrame
+    from hocsinh import HocSinhFrame
+    from chitiet import ChiTietFrame
 except ImportError as e:
     # Cần tạo root tạm thời để hiển thị lỗi
     root_err = tk.Tk()
     root_err.withdraw()
-    messagebox.showerror("Lỗi Import", f"Không tìm thấy file camera.py: {e}\n\nHãy đảm bảo file camera.py ở cùng thư mục.")
+    messagebox.showerror("Lỗi Import", f"Không tìm thấy file: {e}\n\nHãy đảm bảo tất cả file ở cùng thư mục.")
     root_err.destroy()
     exit()
         
@@ -45,14 +46,10 @@ class MainApplication:
         
         # Dọn dẹp frame cũ (nếu có)
         if self.current_frame:
-            # Nếu frame cũ là camera, gọi hàm on_close(force=True)
-            if hasattr(self.current_frame, 'on_close'):
-                try:
-                    # force=True để nó đóng ngay mà không hỏi
-                    self.current_frame.on_close(force=True) 
-                except Exception as e:
-                    print(f"Lỗi khi đóng camera: {e}")
-            self.current_frame.destroy()
+            try:
+                self.current_frame.destroy()
+            except Exception as e:
+                print(f"Lỗi khi đóng frame: {e}")
             
         # Tạo và hiển thị LoginFrame (từ login.py)
         self.current_frame = login.LoginFrame(self.root, on_login_success=self.on_login_success)
@@ -64,7 +61,7 @@ class MainApplication:
     def on_login_success(self, user_info):
         """
         Callback được gọi từ LoginFrame khi đăng nhập thành công.
-        Đây là nơi chuyển hướng đến camera.py
+        Chuyển hướng đến trang chủ (Home)
         """
         
         print(f"Đăng nhập thành công với user: {user_info['username']}")
@@ -78,16 +75,103 @@ class MainApplication:
         self.root.unbind("<Return>")
             
         # 2. Phóng to cửa sổ cho ứng dụng chính
-        # (Kích thước này là tổng kích thước của giao diện camera)
-        main_app_width = 1400 
-        main_app_height = 800
+        main_app_width = 1000 
+        main_app_height = 700
         self.root.geometry(f"{main_app_width}x{main_app_height}")
         self.center_window(main_app_width, main_app_height)
         
-        # 3. Tạo và hiển thị Camera (màn hình chính, từ camera.py)
-        self.current_frame = camera.Camera(self.root, user_info)
+        # 3. Hiển thị trang chủ (Home)
+        self.show_home()
+    
+    def show_home(self):
+        """Hiển thị trang chủ"""
+        print("Hiển thị trang chủ...")
+        
+        # Dọn dẹp frame cũ
+        if self.current_frame:
+            if hasattr(self.current_frame, 'on_close'):
+                try:
+                    self.current_frame.on_close(force=True)
+                except Exception as e:
+                    print(f"Lỗi khi đóng frame: {e}")
+            self.current_frame.destroy()
+        
+        # Tạo và hiển thị HomeFrame
+        self.current_frame = HomeFrame(self.root, self.user_info, self.navigate, self.logout)
         self.current_frame.pack(fill=tk.BOTH, expand=True)
-        self.root.title("Hệ thống Giám sát ATT")
+        self.root.title("Hệ thống Giám sát ATT - Trang chủ")
+    
+    def show_lichsu(self):
+        """Hiển thị lịch sử buổi học"""
+        print("Hiển thị lịch sử...")
+        
+        # Dọn dẹp frame cũ
+        if self.current_frame:
+            self.current_frame.destroy()
+        
+        # Tạo và hiển thị LichSuFrame
+        self.current_frame = LichSuFrame(self.root, self.user_info, self.navigate, self.view_detail)
+        self.current_frame.pack(fill=tk.BOTH, expand=True)
+        self.root.title("Hệ thống Giám sát ATT - Lịch sử")
+    
+    def show_hocsinh(self):
+        """Hiển thị quản lý học sinh"""
+        print("Hiển thị quản lý học sinh...")
+        
+        # Dọn dẹp frame cũ
+        if self.current_frame:
+            self.current_frame.destroy()
+        
+        # Tạo và hiển thị HocSinhFrame
+        self.current_frame = HocSinhFrame(self.root, self.user_info, self.navigate)
+        self.current_frame.pack(fill=tk.BOTH, expand=True)
+        self.root.title("Hệ thống Giám sát ATT - Quản lý học sinh")
+    
+    def show_chitiet(self, seasion_id):
+        """Hiển thị chi tiết buổi học"""
+        print(f"Hiển thị chi tiết buổi học ID: {seasion_id}...")
+        
+        # Dọn dẹp frame cũ
+        if self.current_frame:
+            self.current_frame.destroy()
+        
+        # Tạo và hiển thị ChiTietFrame
+        self.current_frame = ChiTietFrame(self.root, self.user_info, seasion_id, self.navigate)
+        self.current_frame.pack(fill=tk.BOTH, expand=True)
+        self.root.title("Hệ thống Giám sát ATT - Chi tiết buổi học")
+    
+    def show_camera(self):
+        """Hiển thị màn hình camera (chức năng do bạn khác phát triển)"""
+        messagebox.showinfo(
+            "Thông báo",
+            "Chức năng Camera/Tạo buổi học sẽ được phát triển bởi thành viên khác.\n\n"
+            "Hiện tại chỉ có giao diện quản lý."
+        )
+    
+    def navigate(self, page_name):
+        """
+        Hàm điều hướng chung cho tất cả các frame
+        page_name: 'home', 'lichsu', 'hocsinh', 'camera'
+        """
+        if page_name == 'home':
+            self.show_home()
+        elif page_name == 'lichsu':
+            self.show_lichsu()
+        elif page_name == 'hocsinh':
+            self.show_hocsinh()
+        elif page_name == 'camera':
+            self.show_camera()
+        else:
+            print(f"Trang không xác định: {page_name}")
+    
+    def view_detail(self, seasion_id):
+        """Callback để xem chi tiết buổi học từ LichSuFrame"""
+        self.show_chitiet(seasion_id)
+    
+    def logout(self):
+        """Đăng xuất và quay về màn hình đăng nhập"""
+        print("Đăng xuất...")
+        self.show_login_screen()
 
     def center_window(self, width, height):
         """Hàm tiện ích để căn giữa cửa sổ root."""

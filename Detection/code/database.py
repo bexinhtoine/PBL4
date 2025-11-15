@@ -224,16 +224,70 @@ def update_student_avatar(student_db_id, avartar_url):
         if conn: conn.close()
 
 def delete_student(student_db_id):
-    """Xóa học sinh (thay thế student.delete())."""
+    """Xóa học sinh - CHỈ xóa dữ liệu nhận diện khuôn mặt.
+    - XÓA: face_embedding (database) và faces_db.npz (file)
+    - GIỮ: student, focus_record, ảnh trong faces_db_images/"""
     conn = None
     cursor = None
     try:
         conn = get_db_connection()
         if conn is None: return False, "Lỗi kết nối CSDL"
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM student WHERE student_id = %s", (student_db_id,))
+        
+        # 1. Xóa dữ liệu trong bảng face_embedding
+        cursor.execute("DELETE FROM face_embedding WHERE student_id = %s", (student_db_id,))
+        
+        # 2. KHÔNG xóa focus_record - giữ lại lịch sử điểm danh
+        
+        # 3. KHÔNG xóa student - giữ lại thông tin học sinh
+        # cursor.execute("DELETE FROM student WHERE student_id = %s", (student_db_id,))
+        
         conn.commit()
-        return True, "Xóa thành công"
+        
+        # 4. KHÔNG xóa ảnh - giữ lại ảnh trong faces_db_images/
+        
+        # 5. Xóa face embedding trong file faces_db.npz
+        import numpy as np
+        import os
+        npz_path = os.path.join(os.path.dirname(__file__), 'faces_db.npz')
+        if os.path.exists(npz_path):
+            try:
+                # Load file npz
+                data = np.load(npz_path, allow_pickle=True)
+                
+                # Lấy các mảng hiện tại
+                embeddings = data.get('embeddings', np.array([]))
+                labels = data.get('labels', np.array([]))
+                names = data.get('names', np.array([]))
+                
+                # Tìm index của student_id cần xóa
+                if len(labels) > 0:
+                    # Chuyển labels về list để dễ xử lý
+                    labels_list = labels.tolist()
+                    
+                    # Tìm tất cả index có student_id này
+                    indices_to_keep = [i for i, label in enumerate(labels_list) if label != student_db_id]
+                    
+                    if len(indices_to_keep) < len(labels_list):
+                        # Có dữ liệu cần xóa
+                        new_embeddings = embeddings[indices_to_keep]
+                        new_labels = labels[indices_to_keep]
+                        new_names = names[indices_to_keep]
+                        
+                        # Lưu lại file npz
+                        np.savez(npz_path, 
+                                embeddings=new_embeddings, 
+                                labels=new_labels, 
+                                names=new_names)
+                        print(f"Đã xóa {len(labels_list) - len(indices_to_keep)} face embedding(s) của {student_db_id} khỏi faces_db.npz")
+                    else:
+                        print(f"Không tìm thấy face embedding của {student_db_id} trong faces_db.npz")
+                        
+            except Exception as e:
+                print(f"Lỗi khi xóa face embedding trong npz: {e}")
+        
+        return True, "Đã xóa dữ liệu nhận diện khuôn mặt (giữ lại thông tin học sinh)"
+        
     except Error as e:
         if conn: conn.rollback()
         return False, f"Lỗi MySQL: {e}"
