@@ -97,7 +97,7 @@ class HomeFrame(tk.Frame):
             fg='black',
             activebackground='#229954',
             activeforeground='black',
-            command=self.create_session_placeholder,
+            command=lambda: self.on_navigate('camera'),
             **button_style
         )
         btn_create_session.grid(row=1, column=0, padx=20, pady=15)
@@ -161,14 +161,6 @@ class HomeFrame(tk.Frame):
         
         button.bind("<Enter>", on_enter)
         button.bind("<Leave>", on_leave)
-    
-    def create_session_placeholder(self):
-        """Placeholder cho chức năng tạo buổi học"""
-        messagebox.showinfo(
-            "Thông báo",
-            "Chức năng 'Tạo buổi học' sẽ được phát triển bởi thành viên khác.\n\n"
-            "Vui lòng liên hệ với người phụ trách phần này."
-        )
     
     def logout(self):
         """Đăng xuất và quay về màn hình đăng nhập"""

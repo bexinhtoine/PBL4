@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import os
+import traceback # <<< (1) THÊM IMPORT NÀY ĐỂ IN LỖI CHI TIẾT >>>
 
 # --- Import các file code của bạn ---
 import database
@@ -12,6 +13,7 @@ try:
     from lichsu import LichSuFrame
     from hocsinh import HocSinhFrame
     from chitiet import ChiTietFrame
+    from camera import Camera
 except ImportError as e:
     # Cần tạo root tạm thời để hiển thị lỗi
     root_err = tk.Tk()
@@ -36,20 +38,45 @@ class MainApplication:
         # Bắt đầu bằng việc hiển thị màn hình đăng nhập
         self.show_login_screen()
 
+    def _safe_cleanup_current_frame(self, target_page="unknown"):
+        # <<< (2) TÔI ĐÃ TẠO MỘT HÀM DỌN DẸP AN TOÀN MỚI >>>
+        """
+        Hàm nội bộ để dọn dẹp frame hiện tại một cách an toàn
+        trước khi chuyển trang.
+        """
+        if self.current_frame:
+            try:
+                # 1. Gọi on_close nếu có (để giải phóng camera, v.v.)
+                if hasattr(self.current_frame, 'on_close'):
+                    print(f"AppMain: Đang gọi on_close() (khi chuyển đến '{target_page}')...")
+                    self.current_frame.on_close(force=True)
+                    print("AppMain: on_close() hoàn tất.")
+                
+                # 2. Hủy widget frame
+                print(f"AppMain: Đang destroy() frame cũ (khi chuyển đến '{target_page}')...")
+                self.current_frame.destroy()
+                print("AppMain: destroy() hoàn tất.")
+
+            except Exception as e:
+                # Bắt BẤT KỲ lỗi nào xảy ra khi dọn dẹp
+                print(f"!!! LỖI NGHIÊM TRỌNG KHI DỌN DẸP FRAME (-> {target_page}): {e}")
+                traceback.print_exc()
+            
+            # Dù sao cũng phải dọn dẹp biến này
+            self.current_frame = None
+            
+            
     def show_login_screen(self):
         """Hiển thị màn hình đăng nhập."""
         
         print("Hiển thị màn hình đăng nhập...")
         self.user_info = None # Xóa user
+        
+        # <<< (3) SỬ DỤNG HÀM DỌN DẸP MỚI >>>
+        self._safe_cleanup_current_frame(target_page="login")
+        
         self.center_window(400, 450)
         self.root.title("Đăng nhập - Hệ thống Giám sát ATT")
-        
-        # Dọn dẹp frame cũ (nếu có)
-        if self.current_frame:
-            try:
-                self.current_frame.destroy()
-            except Exception as e:
-                print(f"Lỗi khi đóng frame: {e}")
             
         # Tạo và hiển thị LoginFrame (từ login.py)
         self.current_frame = login.LoginFrame(self.root, on_login_success=self.on_login_success)
@@ -61,15 +88,17 @@ class MainApplication:
     def on_login_success(self, user_info):
         """
         Callback được gọi từ LoginFrame khi đăng nhập thành công.
-        Chuyển hướng đến trang chủ (Home)
         """
         
         print(f"Đăng nhập thành công với user: {user_info['username']}")
         self.user_info = user_info # Lưu thông tin user
         
-        # Xóa frame đăng nhập
+        # <<< (4) SỬ DỤNG HÀM DỌN DẸP MỚI (chỉ destroy, không cần on_close) >>>
         if self.current_frame:
-            self.current_frame.destroy()
+            try:
+                self.current_frame.destroy()
+            except Exception as e:
+                print(f"Lỗi khi đóng frame login: {e}")
             
         # 1. Xóa bind phím Enter cũ (rất quan trọng)
         self.root.unbind("<Return>")
@@ -87,14 +116,8 @@ class MainApplication:
         """Hiển thị trang chủ"""
         print("Hiển thị trang chủ...")
         
-        # Dọn dẹp frame cũ
-        if self.current_frame:
-            if hasattr(self.current_frame, 'on_close'):
-                try:
-                    self.current_frame.on_close(force=True)
-                except Exception as e:
-                    print(f"Lỗi khi đóng frame: {e}")
-            self.current_frame.destroy()
+        # <<< (5) SỬ DỤNG HÀM DỌN DẸP MỚI >>>
+        self._safe_cleanup_current_frame(target_page="home")
         
         # Tạo và hiển thị HomeFrame
         self.current_frame = HomeFrame(self.root, self.user_info, self.navigate, self.logout)
@@ -105,9 +128,8 @@ class MainApplication:
         """Hiển thị lịch sử buổi học"""
         print("Hiển thị lịch sử...")
         
-        # Dọn dẹp frame cũ
-        if self.current_frame:
-            self.current_frame.destroy()
+        # <<< (6) SỬ DỤNG HÀM DỌN DẸP MỚI >>>
+        self._safe_cleanup_current_frame(target_page="lichsu")
         
         # Tạo và hiển thị LichSuFrame
         self.current_frame = LichSuFrame(self.root, self.user_info, self.navigate, self.view_detail)
@@ -118,9 +140,8 @@ class MainApplication:
         """Hiển thị quản lý học sinh"""
         print("Hiển thị quản lý học sinh...")
         
-        # Dọn dẹp frame cũ
-        if self.current_frame:
-            self.current_frame.destroy()
+        # <<< (7) SỬ DỤNG HÀM DỌN DẸP MỚI >>>
+        self._safe_cleanup_current_frame(target_page="hocsinh")
         
         # Tạo và hiển thị HocSinhFrame
         self.current_frame = HocSinhFrame(self.root, self.user_info, self.navigate)
@@ -131,9 +152,8 @@ class MainApplication:
         """Hiển thị chi tiết buổi học"""
         print(f"Hiển thị chi tiết buổi học ID: {seasion_id}...")
         
-        # Dọn dẹp frame cũ
-        if self.current_frame:
-            self.current_frame.destroy()
+        # <<< (8) SỬ DỤNG HÀM DỌN DẸP MỚI >>>
+        self._safe_cleanup_current_frame(target_page="chitiet")
         
         # Tạo và hiển thị ChiTietFrame
         self.current_frame = ChiTietFrame(self.root, self.user_info, seasion_id, self.navigate)
@@ -141,17 +161,35 @@ class MainApplication:
         self.root.title("Hệ thống Giám sát ATT - Chi tiết buổi học")
     
     def show_camera(self):
-        """Hiển thị màn hình camera (chức năng do bạn khác phát triển)"""
-        messagebox.showinfo(
-            "Thông báo",
-            "Chức năng Camera/Tạo buổi học sẽ được phát triển bởi thành viên khác.\n\n"
-            "Hiện tại chỉ có giao diện quản lý."
-        )
+        """Hiển thị màn hình camera"""
+        print("Hiển thị màn hình camera...")
+        
+        # <<< (9) SỬ DỤNG HÀM DỌN DẸP MỚI >>>
+        self._safe_cleanup_current_frame(target_page="camera")
+        
+        try:
+            # Tạo và hiển thị CameraFrame
+            self.current_frame = Camera(self.root, self.user_info, self.navigate)
+            self.current_frame.pack(fill=tk.BOTH, expand=True)
+            self.root.title("Hệ thống Giám sát ATT - Tạo buổi học")
+        
+        except Exception as e:
+            # Khối này bắt lỗi KHI KHỞI TẠO camera
+            print(f"!!! LỖI NGHIÊM TRỌNG KHI KHỞI TẠO CAMERA: {e}")
+            traceback.print_exc()
+            
+            messagebox.showerror(
+                "Lỗi Camera",
+                f"Không thể khởi động chức năng camera.\n\nLỗi: {e}\n\n"
+                "Vui lòng kiểm tra camera hoặc file cấu hình model."
+            )
+            
+            # Tự động quay về trang chủ một cách an toàn
+            self.show_home()
     
     def navigate(self, page_name):
         """
         Hàm điều hướng chung cho tất cả các frame
-        page_name: 'home', 'lichsu', 'hocsinh', 'camera'
         """
         if page_name == 'home':
             self.show_home()
@@ -171,6 +209,7 @@ class MainApplication:
     def logout(self):
         """Đăng xuất và quay về màn hình đăng nhập"""
         print("Đăng xuất...")
+        # show_login_screen đã có hàm dọn dẹp an toàn
         self.show_login_screen()
 
     def center_window(self, width, height):
@@ -182,7 +221,7 @@ class MainApplication:
         self.root.geometry(f'{width}x{height}+{x}+{y}')
 
 # ==========================================================
-# KHỐI CHẠY CHÍNH (ĐIỂM BẮT ĐẦU CỦA ỨNG DỤNG)
+# KHỐI CHẠY CHÍNH
 # ==========================================================
 if __name__ == "__main__":
 
@@ -217,7 +256,6 @@ if __name__ == "__main__":
     root = tk.Tk()
     
     # 3. Khởi tạo bộ điều khiển ứng dụng
-    # Bộ điều khiển này sẽ tự lo việc hiển thị màn hình đăng nhập
     app_controller = MainApplication(root)
     
     # 4. Bắt đầu vòng lặp Tkinter

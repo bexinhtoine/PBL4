@@ -2,14 +2,15 @@ import mysql.connector
 from mysql.connector import Error, IntegrityError
 import os
 from datetime import datetime
+# import sqlite3 # <- ĐÃ XÓA
 
 # ===================================================================
 # 1. CẤU HÌNH KẾT NỐI MYSQL
 # !! QUAN TRỌNG: Hãy thay đổi các giá trị này !!
 # ===================================================================
 DB_CONFIG = {
-    'host': 'localhost',        # Hoặc IP của server MySQL
-    'user': 'root',  # Tên user MySQL của bạn
+    'host': 'localhost',      # Hoặc IP của server MySQL
+    'user': 'root', # Tên user MySQL của bạn
     'password': '', # Mật khẩu của user
     'database': 'giamsatatt' # Tên database bạn đã tạo
 }
@@ -39,7 +40,6 @@ def init_db():
 
     try:
         # === 1. Bảng Student (từ model Student) ===
-        # student_id là AutoField (tự tăng)
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS student (
             student_id  INT PRIMARY KEY AUTO_INCREMENT,
@@ -69,7 +69,7 @@ def init_db():
             seasion_id  INT PRIMARY KEY AUTO_INCREMENT,
             class_name  VARCHAR(100) NOT NULL,
             start_time  DATETIME NOT NULL,
-            end_time    DATETIME NOT NULL,
+            end_time    DATETIME DEFAULT NULL, -- [SỬA] Phải là NULL (vì lúc tạo chưa kết thúc)
             created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_seasion_class (class_name)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -96,12 +96,12 @@ def init_db():
             student_id  INT NOT NULL,
             appear      BOOLEAN NOT NULL DEFAULT TRUE, -- 1 (True) 0 (False)
             focus_point INT NOT NULL DEFAULT 0,
-            rate        ENUM('Cao độ', 'Tốt', 'Trung bình', 'Thấp') NOT NULL,
+            rate        ENUM('Cao độ', 'Tốt', 'Trung bình', 'Thấp') DEFAULT NULL, -- [SỬA] Phải là NULL (vì lúc tạo chưa có rate)
             note        TEXT,
             ts_created  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (seasion_id) REFERENCES seasion (seasion_id) ON DELETE CASCADE,
             FOREIGN KEY (student_id) REFERENCES student (student_id) ON DELETE CASCADE,
-            INDEX idx_focus_seasion_student (seasion_id, student_id),
+            UNIQUE INDEX idx_focus_seasion_student (seasion_id, student_id), -- [SỬA] Phải là UNIQUE
             INDEX idx_focus_rate (rate)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
@@ -238,9 +238,7 @@ def delete_student(student_db_id):
         cursor.execute("DELETE FROM face_embedding WHERE student_id = %s", (student_db_id,))
         
         # 2. KHÔNG xóa focus_record - giữ lại lịch sử điểm danh
-        
         # 3. KHÔNG xóa student - giữ lại thông tin học sinh
-        # cursor.execute("DELETE FROM student WHERE student_id = %s", (student_db_id,))
         
         conn.commit()
         
@@ -265,8 +263,9 @@ def delete_student(student_db_id):
                     # Chuyển labels về list để dễ xử lý
                     labels_list = labels.tolist()
                     
-                    # Tìm tất cả index có student_id này
-                    indices_to_keep = [i for i, label in enumerate(labels_list) if label != student_db_id]
+                    # [SỬA] Đảm bảo so sánh chuỗi với chuỗi
+                    student_id_str = str(student_db_id)
+                    indices_to_keep = [i for i, label in enumerate(labels_list) if str(label) != student_id_str]
                     
                     if len(indices_to_keep) < len(labels_list):
                         # Có dữ liệu cần xóa
@@ -276,9 +275,9 @@ def delete_student(student_db_id):
                         
                         # Lưu lại file npz
                         np.savez(npz_path, 
-                                embeddings=new_embeddings, 
-                                labels=new_labels, 
-                                names=new_names)
+                                 embeddings=new_embeddings, 
+                                 labels=new_labels, 
+                                 names=new_names)
                         print(f"Đã xóa {len(labels_list) - len(indices_to_keep)} face embedding(s) của {student_db_id} khỏi faces_db.npz")
                     else:
                         print(f"Không tìm thấy face embedding của {student_db_id} trong faces_db.npz")
@@ -368,3 +367,126 @@ def link_face_embedding(student_db_id, embedding_name, face_image_path):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+        
+# ===================================================================
+# [SỬA] CÁC HÀM MỚI CHO SESSION (Đã đổi sang MySQL)
+# ===================================================================
+
+def create_session(class_name, start_time):
+    """Tạo một session mới và trả về session_id."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return None, "Lỗi kết nối CSDL"
+        cursor = conn.cursor()
+        
+        sql = """
+        INSERT INTO seasion (class_name, start_time) 
+        VALUES (%s, %s)
+        """
+        # start_time nên là đối tượng datetime
+        cursor.execute(sql, (class_name, start_time))
+        conn.commit()
+        
+        new_session_id = cursor.lastrowid
+        return new_session_id, "Tạo session thành công"
+        
+    except Error as e: # [SỬA] Đổi từ sqlite3.Error
+        if conn:
+            conn.rollback()
+        print(f"Lỗi CSDL khi tạo session: {e}")
+        return None, str(e)
+    finally:
+        if cursor: cursor.close() # [SỬA] Thêm
+        if conn:
+            conn.close()
+
+def end_session(session_id, end_time):
+    """Cập nhật end_time cho một session."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return False, "Lỗi kết nối CSDL"
+        cursor = conn.cursor()
+        
+        sql = "UPDATE seasion SET end_time = %s WHERE seasion_id = %s" # [SỬA] Đổi ?
+        cursor.execute(sql, (end_time, session_id))
+        conn.commit()
+        return True, "Cập nhật end_time thành công"
+        
+    except Error as e: # [SỬA] Đổi từ sqlite3.Error
+        if conn:
+            conn.rollback()
+        print(f"Lỗi CSDL khi kết thúc session: {e}")
+        return False, str(e)
+    finally:
+        if cursor: cursor.close() # [SỬA] Thêm
+        if conn:
+            conn.close()
+
+def mark_student_appearance(session_id, student_id):
+    """Tạo bản ghi focus_record khi học sinh xuất hiện lần đầu."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return False, "Lỗi kết nối CSDL"
+        cursor = conn.cursor()
+        
+        # [SỬA] Đổi sang cú pháp MySQL 'INSERT IGNORE' và %s
+        # (Bảng phải có UNIQUE INDEX(seasion_id, student_id)
+        # (Bảng phải cho phép 'rate' là NULL)
+        sql = """
+        INSERT IGNORE INTO focus_record (seasion_id, student_id, appear, ts_created) 
+        VALUES (%s, %s, 1, %s)
+        """
+        
+        cursor.execute(sql, (session_id, student_id, datetime.now()))
+        conn.commit()
+        return True, "Đã ghi nhận"
+        
+    except Error as e: # [SỬA] Đổi từ sqlite3.Error
+        if conn:
+            conn.rollback()
+        print(f"Lỗi CSDL khi ghi nhận (appear): {e}")
+        return False, str(e)
+    finally:
+        if cursor: cursor.close() # [SỬA] Thêm
+        if conn:
+            conn.close()
+
+def update_focus_record(session_id, student_id, focus_point, rate, note):
+    """Cập nhật kết quả cuối cùng cho học sinh vào focus_record."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return False, "Lỗi kết nối CSDL"
+        cursor = conn.cursor()
+        
+        # [SỬA] Đổi ? sang %s
+        sql = """
+        UPDATE focus_record 
+        SET focus_point = %s, rate = %s, note = %s
+        WHERE seasion_id = %s AND student_id = %s
+        """
+        cursor.execute(sql, (focus_point, rate, note, session_id, student_id))
+        conn.commit()
+        
+        if cursor.rowcount == 0:
+             print(f"Không tìm thấy focus_record để update cho student {student_id} session {session_id}")
+             return False, "Không tìm thấy bản ghi"
+             
+        return True, "Cập nhật thành công"
+        
+    except Error as e: # [SỬA] Đổi từ sqlite3.Error
+        if conn:
+            conn.rollback()
+        print(f"Lỗi CSDL khi cập nhật focus_record: {e}")
+        return False, str(e)
+    finally:
+        if cursor: cursor.close() # [SỬA] Thêm
+        if conn:
+            conn.close()

@@ -7,10 +7,17 @@ from PIL import Image, ImageTk, ImageDraw, ImageFont
 import re 
 from tkinter import Toplevel 
 from datetime import datetime 
+import traceback
+from focus_manager import FocusScoreManager # << Đã import
 
 # --- Import các file code của bạn ---
 import database 
 import os
+
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# >>> [SỬA 2] THÊM IMPORT MODULE AI <<<
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+import ai_summarizer
 
 # (Các import lõi AI của bạn)
 try:
@@ -135,16 +142,17 @@ class Camera(ttk.Frame):
     """
     Đây là lớp Màn hình chính
     """
-    def __init__(self, master, user_info):
+    def __init__(self, master, user_info, on_navigate):
         
         super().__init__(master, padding=10)
         self.pack(fill=tk.BOTH, expand=True) 
+        self.on_navigate = on_navigate
         
         self.user_info = user_info 
         username = self.user_info.get('username', 'User')
 
         self.root = master 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close_app)
 
         top_frame = tk.Frame(self)
         top_frame.pack(fill="both", expand=True, padx=8, pady=8)
@@ -156,14 +164,27 @@ class Camera(ttk.Frame):
         self.info_frame = tk.Frame(top_frame)
         self.info_frame.pack(side="right", padx=(8,0), fill="y")
 
-        # --- THÊM CỘT ID VÀO BẢNG ---
-        cols = ("ID", "No", "Name", "Eyes", "Mouth", "Head", "Behavior", "Alerts")
+        # (Giữ nguyên 7 cột)
+        cols = (
+            "ID", "No", "Name", "Score", "Eyes", "Head", 
+            "Behavior"
+        )
         self.info_tree = ttk.Treeview(self.info_frame, columns=cols, show='headings', height=24)
-        col_w = [50, 40, 160, 120, 120, 140, 160, 340] 
+        
+        # (Giữ nguyên 7 độ rộng)
+        col_w = [
+            50,  # ID
+            40,  # No
+            120, # Name
+            50,  # Score
+            100, # Eyes
+            100, # Head
+            600, # Behavior (Rộng)
+        ] 
+
         for c, w in zip(cols, col_w):
             self.info_tree.heading(c, text=c)
             self.info_tree.column(c, width=w, anchor='w')
-        # --- KẾT THÚC THÊM CỘT ID ---
 
         self.info_vscroll = tk.Scrollbar(self.info_frame, orient='vertical', command=self.info_tree.yview)
         self.info_tree.configure(yscrollcommand=self.info_vscroll.set)
@@ -181,69 +202,61 @@ class Camera(ttk.Frame):
         btnf = tk.Frame(self)
         btnf.pack(pady=4)
         
-        # === THAY ĐỔI NÚT BẤM (ĐÃ SỬA) ===
-        
-        # 1. Nút "Chọn video" MỚI
         self.btn_select_video = tk.Button(btnf, text="Chọn video", command=self.select_video_file)
         self.btn_select_video.pack(side="left", padx=5)
-        
-        # 2. Nút "Phát/Dừng" (thay thế nút "Phát video" cũ)
         self.btn_video = tk.Button(btnf, text="Phát Video", command=self.toggle_play_pause)
         self.btn_video.pack(side="left", padx=5)
-        self.btn_video.config(state="disabled") # Bắt đầu ở trạng thái bị vô hiệu hóa
-        
-        # 3. Các nút khác giữ nguyên
+        self.btn_video.config(state="disabled") 
         tk.Button(btnf, text="Ghi video", command=self.toggle_record).pack(side="left", padx=5)
         tk.Button(btnf, text="Đăng ký khuôn mặt", command=self.enroll_one).pack(side="left", padx=5)
-        
         self.btn_webcam = tk.Button(btnf, text="Mở Webcam", command=self.toggle_webcam)
         self.btn_webcam.pack(side="left", padx=5)
-        # Nút Webcam luôn ở trạng thái "normal" (sửa lỗi)
-        
-        tk.Button(btnf, text="Thoát", command=self.on_close).pack(side="left", padx=5)
-        # === KẾT THÚC THAY ĐỔI NÚT BẤM ===
+        tk.Button(btnf, text="Thoát", command=lambda: self.on_navigate('home')).pack(side="left", padx=5)
 
         self.status = tk.Label(self, text=f"Trạng thái: Sẵn sàng. Chào, {username}!", anchor="w")
         self.status.pack(fill="x", padx=8, pady=(0,8))
 
+        # (Các biến khởi tạo khác giữ nguyên)
         self.cap = None
-        self.running = False
+        self.running = False 
         self.mode = 'idle' 
         self.period = 1.0/TARGET_FPS
-        
-        # --- BIẾN TRẠNG THÁI MỚI ---
-        self.paused = False # Trạng thái Tạm dừng
-        self.video_file_path = None # Lưu đường dẫn video đã chọn
-        # --- KẾT THÚC BIẾN MỚI ---
-        
+        self.paused = False 
+        self.video_file_path = None 
         self.frame_lock = threading.Lock(); self.latest_frame = None
         self.det_lock = threading.Lock(); self.last_boxes=[]; self.last_scores=[]
-        
         self.id_lock  = threading.Lock()
         self.last_names = [] 
         self.last_confs = []
         self.last_student_ids = [] 
         self.id_to_name_cache = {} 
-
         self.frame_count = 0
         self.force_recog_frames = 0; self.sticky = None; self.enrolling = False
         self.writer=None; self.recording=False; self.out_fps=TARGET_FPS; 
         self.out_path=OUT_VIDEO_DEFAULT 
-        
         self.capture_thread_handle = None
         self.infer_thread_handle = None
-
         self.model = self.load_model(MODEL_PATH)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.recog = RecognitionEngine(self.device, recog_thres=RECOG_THRES, face_margin=FACE_MARGIN)
         self.analyzer = BieuCamAnalyzer()
-
+        self.focus_manager = FocusScoreManager(base_score=0) 
+        self.focus_logs = {}
+        
+        # (# === SỬA ĐỔI 1: Thêm cờ kiểm soát phân tích ===)
+        # Cờ bật/tắt nhận diện hành vi (Mắt, Đầu)
+        self.enable_behavior_analysis = False
+        
+        # (Các biến quản lý Session giữ nguyên)
+        self.current_session_id = None
+        self.session_start_time = None      # Dùng time.time() để tính duration
+        self.session_appeared_students = set() # Set chứa các student_id đã CÓ trong focus_record
+        
         try:
             self.pil_font = ImageFont.truetype(FONT_PATH, 16) 
         except IOError:
             messagebox.showwarning("Lỗi Font", f"Không tìm thấy file font: {FONT_PATH}\n\nChữ tiếng Việt sẽ hiển thị lỗi.")
             self.pil_font = ImageFont.load_default() 
-        
         db_path_full = os.path.join(BASE_DIR, DB_PATH_DEFAULT)
         if os.path.exists(db_path_full):
             try:
@@ -254,19 +267,23 @@ class Camera(ttk.Frame):
                 self.set_status(f"Lỗi tải DB. (N={len(self.recog.names)})")
         else:
             self.set_status(f"Sẵn sàng. Không tìm thấy {DB_PATH_DEFAULT}. DB trống.")
-        
         self.last_analysis = None
-        self.root.after(16, self.gui_loop)
+        self.after_id = None 
+        self.gui_loop() # Bắt đầu vòng lặp
 
+    
     def set_status(self, t): 
-        if self.status:
-            self.status.config(text=f"Trạng thái: {t}")
+        try:
+            if self.status:
+                self.status.config(text=f"Trạng thái: {t}")
+        except tk.TclError:
+             pass 
 
     def load_model(self, path):
+        # (Hàm này giữ nguyên)
         if not os.path.exists(path):
             messagebox.showerror("Lỗi", f"Không tìm thấy model: {path}"); self.root.destroy()
             return None
-            
         m = YOLO(path)
         if torch.cuda.is_available():
             m.to("cuda"); 
@@ -275,111 +292,153 @@ class Camera(ttk.Frame):
         except: pass
         return m
 
-    # --- CÁC HÀM CONTROL VIDEO/WEBCAM (ĐÃ VIẾT LẠI) ---
-    
     def select_video_file(self):
-        """Hàm này chỉ MỞ file dialog để CHỌN video."""
-        # Nếu đang chạy webcam hoặc video khác, dừng lại
+        # (Hàm này giữ nguyên)
         if self.mode != 'idle':
             self.stop() 
-
         video_file_path = filedialog.askopenfilename(
             title="Chọn file video",
             filetypes=[("Video files", "*.mp4 *.avi *.mkv *.mov"), ("All files", "*.*")]
         )
         if not video_file_path: 
             return 
+        self.video_file_path = video_file_path 
+        self.start_video_stream() 
 
-        self.video_file_path = video_file_path # Lưu đường dẫn
-        self.start_video_stream() # Bắt đầu phát video
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # >>> [SỬA 3] ĐẶT LỚP HỌC MẶC ĐỊNH <<<
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    def prompt_and_start_session(self):
+        """Hỏi người dùng có muốn bắt đầu session không. Trả về True nếu thành công, False nếu hủy."""
+        if messagebox.askyesno("Bắt đầu buổi học?", "Bạn có muốn bắt đầu một buổi học (session) mới không?\n(Kết quả sẽ được lưu vào CSDL)", parent=self.root):
+            
+            # 1. [SỬA] Đặt tên lớp mặc định
+            class_name = "lớp A"
+            # (Đã xóa simpledialog.askstring)
+            
+            # 2. Tạo session trong CSDL
+            try:
+                start_time = datetime.now()
+                new_session_id, msg = database.create_session(class_name, start_time)
+                
+                if new_session_id is None:
+                    messagebox.showerror("Lỗi DB", f"Không thể tạo session: {msg}")
+                    return False # Lỗi, hủy
+                
+                # 3. Lưu trạng thái session
+                self.current_session_id = new_session_id
+                self.session_start_time = time.time() # Dùng time.time() để tính duration
+                self.session_appeared_students = set()
+                
+                # Reset trình quản lý điểm cho session mới
+                self.focus_manager = FocusScoreManager(base_score=0) 
+                
+                self.set_status(f"Session {self.current_session_id} ({class_name}) ĐÃ BẮT ĐẦU.")
+                return True # Bắt đầu thành công
 
+            except Exception as e:
+                messagebox.showerror("Lỗi DB", f"Lỗi khi gọi database.create_session: {e}")
+                traceback.print_exc()
+                return False # Lỗi, hủy
+        
+        else:
+            # 4. Người dùng chọn "Không"
+            self.current_session_id = None
+            self.session_start_time = None
+            self.session_appeared_students = set()
+            # Reset điểm khi chạy không ghi
+            self.focus_manager = FocusScoreManager(base_score=0)
+            self.set_status("Đang chạy (không ghi session).")
+            return True # Vẫn tiếp tục (nhưng không ghi CSDL)
+
+    # (Hàm start_video_stream giữ nguyên)
     def start_video_stream(self):
-        """Hàm này MỞ video từ self.video_file_path và BẮT ĐẦU các luồng."""
         if not self.video_file_path:
             messagebox.showerror("Lỗi", "Chưa chọn file video.")
             return
-
         try:
             self.cap = cv2.VideoCapture(self.video_file_path)
             if not self.cap.isOpened():
                 messagebox.showerror("Lỗi", f"Không mở được video: {self.video_file_path}"); return
-
+            
+            if not self.prompt_and_start_session():
+                if self.cap: self.cap.release(); self.cap = None
+                return 
+            
             self.out_path = os.path.join(
                 os.path.dirname(self.video_file_path), 
                 os.path.splitext(os.path.basename(self.video_file_path))[0] + "_output.mp4"
             )
 
-            fps = self.cap.get(cv2.CAP_PROP_FPS)
-            if fps and fps > 1e-3:
-                self.period = 1.0 / fps; self.out_fps = fps
-                self.set_status(f"Đang phát: {os.path.basename(self.video_file_path)} ({fps:.1f} FPS)")
-            else:
-                self.period = 1.0 / TARGET_FPS; self.out_fps = TARGET_FPS
-                self.set_status(f"Đang phát: {os.path.basename(self.video_file_path)} (dùng {TARGET_FPS:.1f} FPS)")
+            print(f"Áp dụng TARGET_FPS ({TARGET_FPS}) cho video.")
+            self.period = 1.0 / TARGET_FPS
+            
+            # Vẫn cố gắng lấy fps gốc để GHI VIDEO (out_fps)
+            fps_goc = self.cap.get(cv2.CAP_PROP_FPS)
+            self.out_fps = fps_goc if (fps_goc and fps_goc > 1e-3) else TARGET_FPS
 
-            self.running = True  # Bật cờ cho các luồng
-            self.paused = False  # Bắt đầu ở trạng thái phát
+            
+            self.running = True  
+            self.paused = False  
             self.mode = 'video' 
             
-            # Cập nhật trạng thái nút
-            self.btn_video.config(text="Dừng Video", state="normal") # Kích hoạt nút Dừng
+            # (# === SỬA ĐỔI 2: Kích hoạt cờ phân tích ===)
+            self.enable_behavior_analysis = True
+            
+            self.btn_video.config(text="Dừng Video", state="normal") 
             self.btn_select_video.config(text="Đổi video") 
-            # SỬA LỖI: Không vô hiệu hóa nút webcam
             self.btn_webcam.config(state="normal") 
-
-            # Khởi động các luồng
             self.capture_thread_handle = threading.Thread(target=self.capture_thread, daemon=True)
             self.capture_thread_handle.start()
             self.infer_thread_handle = threading.Thread(target=self.infer_thread, daemon=True)
             self.infer_thread_handle.start()
-            
+
+            if self.after_id:
+                self.root.after_cancel(self.after_id)
+                self.after_id = None
+            self.after(10, self.gui_loop) # Bắt đầu lại vòng lặp (10ms sau)
+
         except Exception as e:
             messagebox.showerror("Lỗi Video", f"Lỗi không xác định khi mở video:\n{e}")
             if self.cap: self.cap.release(); self.cap = None
 
+    # (Hàm toggle_play_pause giữ nguyên)
     def toggle_play_pause(self):
-        """Hàm này xử lý PHÁT/DỪNG (Play/Pause) video đang mở."""
         if not self.running or self.mode != 'video':
-            return # Không làm gì nếu video chưa chạy
-
+            return 
         if self.paused:
-            # --- LOGIC PHÁT (RESUME) ---
-            
             is_at_end = False
             if self.cap:
                 current_frame = self.cap.get(cv2.CAP_PROP_POS_FRAMES)
                 total_frames = self.cap.get(cv2.CAP_PROP_FRAME_COUNT)
                 if current_frame >= total_frames - 1:
                     is_at_end = True
-            
             if is_at_end:
-                # Nếu đã kết thúc, tua lại từ đầu
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                self.set_status(f"Phát lại: {os.path.basename(self.video_file_path)}")
+                if self.current_session_id is None:
+                    self.set_status(f"Phát lại: {os.path.basename(self.video_file_path)}")
             else:
-                self.set_status(f"Đang phát: {os.path.basename(self.video_file_path)}")
-
-            self.paused = False # Bỏ tạm dừng
+                if self.current_session_id is None:
+                    self.set_status(f"Đang phát: {os.path.basename(self.video_file_path)}")
+            self.paused = False 
             self.btn_video.config(text="Dừng Video")
-
         else:
-            # --- LOGIC DỪNG (PAUSE) ---
             self.paused = True
             self.btn_video.config(text="Phát Video")
-            self.set_status("Đã tạm dừng video")
+            if self.current_session_id is None:
+                self.set_status("Đã tạm dừng video")
     
+    # (Hàm toggle_webcam giữ nguyên)
     def toggle_webcam(self):
-        """Hàm này bật/tắt webcam."""
         if self.mode == 'webcam':
             self.stop()
         else:
-            # Nếu đang ở chế độ video (đang phát hoặc tạm dừng), dừng nó lại
             if self.mode == 'video':
                 self.stop()
             self.start_webcam()
 
+    # (Hàm start_webcam giữ nguyên)
     def start_webcam(self):
-        """Hàm này chỉ khởi động webcam."""
         try:
             self.cap = cv2.VideoCapture(0) 
             if not self.cap.isOpened():
@@ -387,189 +446,183 @@ class Camera(ttk.Frame):
                 if not self.cap.isOpened():
                         messagebox.showerror("Lỗi Webcam", "Không mở được webcam (đã thử index 0 và 1).")
                         return
-
+                        
+            if not self.prompt_and_start_session():
+                if self.cap: self.cap.release(); self.cap = None
+                return 
+            
             self.period = 1.0 / TARGET_FPS
             self.out_fps = TARGET_FPS
-            self.set_status(f"Đang chạy: Webcam (dùng {TARGET_FPS:.1f} FPS)")
             self.out_path = "webcam_output.mp4"
             self.running = True
             self.mode = 'webcam' 
-            self.paused = False # Đảm bảo không bị tạm dừng
+            self.paused = False 
             
-            # Cập nhật trạng thái nút
+            # (# === SỬA ĐỔI 3: Kích hoạt cờ phân tích ===)
+            self.enable_behavior_analysis = True
+            
             self.btn_webcam.config(text="Dừng Webcam") 
-            # Vô hiệu hóa các nút video
             self.btn_video.config(state="disabled", text="Phát Video")
             self.btn_select_video.config(state="disabled")
-
             self.capture_thread_handle = threading.Thread(target=self.capture_thread, daemon=True)
             self.capture_thread_handle.start()
             self.infer_thread_handle = threading.Thread(target=self.infer_thread, daemon=True)
             self.infer_thread_handle.start()
-            
+
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            # >>> [SỬA LỖI] BẮT ĐẦU LẠI VÒNG LẶP GUI <<<
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            # Phải gọi lại gui_loop() vì nó đã dừng ở màn hình "Sẵn sàng"
+            if self.after_id:
+                self.root.after_cancel(self.after_id)
+                self.after_id = None
+            self.after(10, self.gui_loop) # Bắt đầu lại vòng lặp (10ms sau)
+
         except Exception as e:
             messagebox.showerror("Lỗi Webcam", f"Lỗi không xác định khi mở webcam:\n{e}")
             if self.cap: self.cap.release(); self.cap = None
 
+    # (Hàm stop giữ nguyên)
     def stop(self):
-        """Hàm dừng chung, reset mọi thứ về trạng thái ban đầu."""
+        try:
+            self.finalize_session()
+        except Exception as e:
+            print(f"Lỗi khi finalize_session: {e}")
+            traceback.print_exc()
+
         self.running = False 
+        
+        # (# === SỬA ĐỔI 4: Reset cờ phân tích ===)
+        self.enable_behavior_analysis = False
         
         try:
             if self.capture_thread_handle is not None and self.capture_thread_handle.is_alive():
                 self.capture_thread_handle.join(timeout=1.5) 
         except Exception as e:
             print(f"Lỗi khi join luồng capture: {e}")
-            
         try:
             if self.infer_thread_handle is not None and self.infer_thread_handle.is_alive():
                 self.infer_thread_handle.join(timeout=1.0) 
         except Exception as e:
             print(f"Lỗi khi join luồng infer: {e}")
-
         self.mode = 'idle' 
-        self.paused = False # Reset trạng thái tạm dừng
-        self.video_file_path = None # Xóa đường dẫn video
-        
-        # Reset trạng thái các nút về ban đầu (ĐÃ SỬA)
-        self.btn_video.config(text="Phát Video", state="disabled") # Vô hiệu hóa
-        self.btn_webcam.config(text="Mở Webcam", state="normal") # Kích hoạt
-        self.btn_select_video.config(text="Chọn video", state="normal") # Kích hoạt
-
-        self.set_status("Đã dừng")
-        
+        self.paused = False 
+        self.video_file_path = None 
+        try:
+            self.btn_video.config(text="Phát Video", state="disabled") 
+            self.btn_webcam.config(text="Mở Webcam", state="normal") 
+            self.btn_select_video.config(text="Chọn video", state="normal") 
+            self.set_status("Đã dừng")
+        except tk.TclError:
+            pass 
         if self.cap: 
             self.cap.release()
             self.cap = None
-            
         self._close_writer()
         self.recording = False
-        
         self.capture_thread_handle = None
         self.infer_thread_handle = None
 
-    # === KẾT THÚC CÁC HÀM CONTROL ===
-
-    
-    # Threads
+    # (Hàm capture_thread giữ nguyên)
     def capture_thread(self):
-        """Luồng đọc frame (ĐÃ SỬA cho logic Play/Pause)."""
-        while self.running and self.cap:
+        print("Capture thread đã bắt đầu.") 
+        while self.running:
             try:
-                # --- LOGIC TẠM DỪNG (PAUSE) MỚI ---
+                if not (hasattr(self, 'cap') and self.cap and self.cap.isOpened()):
+                    if self.running: 
+                        time.sleep(0.01)
+                    continue
                 if self.paused:
-                    time.sleep(0.05) # Ngủ một chút khi đang tạm dừng
-                    continue # Bỏ qua phần còn lại của vòng lặp và lặp lại
-                # --- KẾT THÚC LOGIC TẠM DỪNG ---
-                
+                    time.sleep(0.05) 
+                    continue 
                 t0 = time.time()
                 ok, f = self.cap.read()
-                
                 if not ok:
-                    # Nếu video kết thúc
                     if self.mode == 'video' and self.cap:
-                        # Tự động tạm dừng và chờ người dùng bấm "Phát Lại"
-                        self.root.after(0, self._handle_video_end) # Cập nhật GUI an toàn
-                        
-                        # Giữ luồng này "sống" nhưng ở trạng thái tạm dừng
+                        self.root.after(0, self._handle_video_end) 
                         while self.paused and self.running:
                             time.sleep(0.05)
-                        
-                        # Nếu self.running = False (bấm stop), vòng lặp while bên ngoài sẽ thoát
-                        # Nếu self.paused = False (bấm Phát Lại), logic trong toggle_play_pause
-                        # đã tua video, chúng ta chỉ cần 'continue' để đọc frame mới
                         if self.running:
                             continue 
                         else:
                             break
                     else: 
-                        # Webcam hỏng hoặc lỗi không xác định
+                        print("Capture thread: !ok và không phải video, dừng.")
                         self.running = False 
                         break
-                
                 if self.mode == 'webcam':
                     f = cv2.flip(f, 1) 
-                    
                 f = cv2.resize(f, (VIEW_W, VIEW_H))
                 with self.frame_lock: self.latest_frame = f.copy()
-                
                 dt = time.time()-t0
                 if dt < self.period: 
                     time.sleep(self.period-dt)
             except Exception as e:
-                print(f"Lỗi trong capture_thread: {e}")
+                if self.running:
+                    print(f"Lỗi trong capture_thread: {e}")
                 self.running = False
-                
-    def _handle_video_end(self):
-        """Hàm hỗ trợ: Cập nhật GUI khi video kết thúc (gọi từ luồng khác)."""
-        if self.mode == 'video':
-            self.paused = True
-            self.btn_video.config(text="Phát Lại")
-            self.set_status("Video đã kết thúc. Bấm 'Phát Lại' để xem lại.")
+        print("Capture thread đã thoát.")
             
-    # ===================================================================
-    # LUỒNG INFER_THREAD (Không thay đổi)
-    # ===================================================================
+    # (Hàm _handle_video_end giữ nguyên)
+    def _handle_video_end(self):
+        try:
+            if self.mode == 'video':
+                self.paused = True
+                self.btn_video.config(text="Phát Lại")
+                if self.current_session_id is None:
+                    self.set_status("Video đã kết thúc. Bấm 'Phát Lại' để xem lại.")
+        except tk.TclError:
+            pass 
+            
+    # (Hàm infer_thread giữ nguyên)
     def infer_thread(self):
+        print("Infer thread đã bắt đầu.") 
         while self.running:
             frame = None 
-            
-            # --- Logic TẠM DỪNG MỚI cho infer_thread ---
             if self.paused:
                 time.sleep(0.05)
                 continue
-            # --- Hết ---
-            
             try:
                 with self.frame_lock:
                     if self.latest_frame is not None:
                             frame = self.latest_frame.copy()
-                
                 if frame is None:
                     time.sleep(0.005)
                     continue
-
                 if self.model is None:
                     time.sleep(0.01); continue
-                    
                 self.frame_count += 1
                 res = self.model(frame, conf=CONF_THRES, verbose=False)[0]
                 boxes  = res.boxes.xyxy.cpu().numpy().astype(int) if res.boxes else np.zeros((0,4), dtype=int)
-                scores = res.boxes.conf.cpu().numpy().tolist()     if res.boxes else []
-
+                scores = res.boxes.conf.cpu().numpy().tolist()   if res.boxes else []
                 names = []
                 confs = []
                 student_ids = []
-                
                 force_now = self.force_recog_frames > 0
                 if RECOG_ENABLED and len(boxes)>0 and (force_now or (self.frame_count % RECOG_EVERY_N == 0)):
                     embs, idx = self.recog.embed_batch(frame, boxes)
-                    
                     pn, pc = [UNKNOWN_NAME]*len(boxes), [0.0]*len(boxes)
                     if embs is not None:
                         pred_names_or_ids, pred_confs = self.recog.predict_batch(embs)
                         for k,i in enumerate(idx): 
                             pn[i] = pred_names_or_ids[k]
                             pc[i] = pred_confs[k]
-
                     names = [UNKNOWN_NAME] * len(boxes)
                     confs = pc
                     student_ids = [None] * len(boxes)
-
                     for i, id_str in enumerate(pn):
                         if id_str != UNKNOWN_NAME:
                             try:
-                                student_id = int(id_str) # Chuyển "123" -> 123
+                                student_id = int(id_str) 
                                 student_ids[i] = student_id
-                                
                                 if student_id in self.id_to_name_cache:
                                     names[i] = self.id_to_name_cache[student_id]
                                 else:
                                     student_info = database.get_student_by_id(student_id)
                                     if student_info:
-                                        name = student_info['name']
+                                        name = student_info.get('name', f"ID_{id_str}_NO_NAME")
                                         names[i] = name
-                                        self.id_to_name_cache[student_id] = name # Lưu cache
+                                        self.id_to_name_cache[student_id] = name 
                                     else:
                                         names[i] = f"ID_{id_str}_NOT_FOUND" 
                                         self.id_to_name_cache[student_id] = names[i]
@@ -586,305 +639,568 @@ class Camera(ttk.Frame):
                             names = [UNKNOWN_NAME] * len(boxes)
                             confs = [0.0] * len(boxes)
                             student_ids = [None] * len(boxes)
-
                 if self.force_recog_frames>0: self.force_recog_frames-=1
-
                 if self.sticky is not None and len(boxes)>0 and self.sticky.get('ttl',0)>0:
                     sbox=self.sticky['box']
-                    sname=self.sticky['name'] # Tên (Nguyễn Văn A)
-                    sid = self.sticky.get('id')  # ID (123)
-                    
+                    sname=self.sticky['name'] 
+                    sid = self.sticky.get('id')  
                     best_i,best_iou=-1,0.0
                     for i,b in enumerate(boxes):
                         iou=iou_xyxy(tuple(b), tuple(sbox))
                         if iou>best_iou: best_i,best_iou=i,iou
                     if best_i>=0 and best_iou>=0.3:
-                        names[best_i] = sname # Ghi đè Tên
-                        student_ids[best_i] = sid # Ghi đè ID
+                        names[best_i] = sname 
+                        student_ids[best_i] = sid 
                         confs[best_i] = 1.0
                         self.sticky['ttl']-=1
-
                 with self.det_lock:
                     self.last_boxes=boxes; self.last_scores=scores
                 with self.id_lock:
                     self.last_names = names
                     self.last_confs = confs
                     self.last_student_ids = student_ids 
-
                 
-                fb = [tuple(map(int, b)) for b in boxes] if len(boxes) > 0 else None
-                self.last_analysis = self.analyzer.analyze_frame(frame, face_boxes=fb)
-                
+                # (# === SỬA ĐỔI 5: Chỉ chạy phân tích nếu cờ được bật ===)
+                if self.enable_behavior_analysis and len(boxes) > 0:
+                    fb = [tuple(map(int, b)) for b in boxes]
+                    self.last_analysis = self.analyzer.analyze_frame(frame, face_boxes=fb)
+                else:
+                    # Nếu không bật, reset phân tích
+                    self.last_analysis = None
+                # (======================================================)
+                    
             except Exception as e:
-                print(f"Lỗi nghiêm trọng trong infer_thread: {e}")
+                if self.running:
+                    print(f"Lỗi nghiêm trọng trong infer_thread: {e}")
                 self.last_analysis = None
+        print("Infer thread đã thoát.")
 
 
     
-    # ===================================================================
-    # HÀM GUI_LOOP (Không thay đổi)
-    # ===================================================================
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # >>> [SỬA LẦN 3] HÀM GUI_LOOP (SỬA LOGIC HIỂN THỊ TIMER) <<<
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     def gui_loop(self):
-        frame=None
-        with self.frame_lock:
-            if self.latest_frame is not None: frame=self.latest_frame.copy()
         
-        # Sửa logic hiển thị khi tạm dừng
-        if frame is None:
-            if not self.running:
+        try:
+            # Lấy trạng thái MỘT LẦN
+            is_running = self.running 
+            is_paused = self.paused
+            
+            frame = None
+            if is_running: # Chỉ lấy frame nếu đang chạy
+                with self.frame_lock:
+                    if self.latest_frame is not None:
+                        frame = self.latest_frame.copy()
+            
+            # --- A. KHÔNG CHẠY (Đã bấm Stop) ---
+            if not is_running:
                 self.left_panel.config(text="Sẵn sàng. Hãy 'Chọn video' hoặc 'Mở Webcam'.", image=None)
-            elif self.paused:
-                 self.left_panel.config(text="Đã tạm dừng. Bấm 'Phát Video' để tiếp tục.", image=None)
-            else:
-                self.left_panel.config(text="Đang tải...", image=None)
-            
-            self.root.after(16, self.gui_loop)
-            return
-
-        with self.det_lock, self.id_lock:
-            boxes=list(self.last_boxes); scores=list(self.last_scores)
-            names=list(self.last_names); confs=list(self.last_confs)
-            student_ids = list(self.last_student_ids) 
-
-        
-        # --- LOGIC VẼ (Dùng PIL) ---
-        img_pil = None
-        draw = None
-        try:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_pil = Image.fromarray(frame_rgb)
-            draw = ImageDraw.Draw(img_pil)
-        except Exception as e:
-            print(f"Lỗi chuyển đổi PIL: {e}")
-            img_pil = None 
-            
-        for i, ((x1,y1,x2,y2), detc) in enumerate(zip(boxes, scores)):
-            name = names[i] if i < len(names) else UNKNOWN_NAME
-            simc = confs[i] if i < len(confs) else 0.0
-            student_id = student_ids[i] if i < len(student_ids) else None
-            
-            color=(0,255,0) if name!=UNKNOWN_NAME else (0,0,255)
-            
-            display_name = name.split(" ")[-1] if name != UNKNOWN_NAME else UNKNOWN_NAME
-            id_str = str(student_id) if student_id else '?'
-            text_to_draw = f"ID: {id_str} | {display_name} {simc:.2f}"
-
-            cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
-            
-            if img_pil and draw and self.pil_font:
                 try:
-                    frame_rgb_with_rect = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    img_pil = Image.fromarray(frame_rgb_with_rect)
-                    draw = ImageDraw.Draw(img_pil)
-                    
-                    draw.text((x1 + 2, max(0, y1 - 20)), text_to_draw, font=self.pil_font, fill=color)
-                    
-                    frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                except Exception as e:
-                    print(f"Lỗi PIL draw: {e}")
-                    cv2.putText(frame, f"ID: {id_str} | {display_name} {simc:.2f}",
-                                (x1, max(20,y1-8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            else:
-                 cv2.putText(frame, f"ID: {id_str} | {display_name} {simc:.2f}",
-                                (x1, max(20,y1-8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        # --- KẾT THÚC LOGIC VẼ ---
+                    # Xóa bảng
+                    for item in self.info_tree.get_children():
+                        self.info_tree.delete(item)
+                except tk.TclError: 
+                    pass
+                # Hủy vòng lặp 'after' (nếu còn)
+                if self.after_id:
+                    self.root.after_cancel(self.after_id)
+                    self.after_id = None
+                return # Dừng hàm gui_loop tại đây
 
-        if self.last_analysis is not None:
-            frame = self.analyzer.draw_analysis_info(frame, self.last_analysis)
+            # --- B. ĐANG CHẠY, NHƯNG BỊ PAUSE (hoặc chưa có frame) ---
+            if frame is None or is_paused:
+                if is_paused:
+                    # Giữ nguyên frame cuối, chỉ đổi text
+                    self.left_panel.config(text="Đã tạm dừng. Bấm 'Phát Video' để tiếp tục.")
+                else: # Đang chạy, chưa có frame
+                    self.left_panel.config(text="Đang tải...", image=None)
+                
+                # Không cập nhật timer, nhưng tiếp tục vòng lặp
+                self.after_id = self.root.after(16, self.gui_loop)
+                return # Dừng xử lý frame này, đợi frame tiếp
 
-        if self.recording and self.writer is not None:
+            # --- C. ĐANG CHẠY, KHÔNG PAUSE, CÓ FRAME ---
+            # (Đây là logic xử lý chính)
+            
+            with self.det_lock, self.id_lock:
+                boxes=list(self.last_boxes); scores=list(self.last_scores)
+                names=list(self.last_names); confs=list(self.last_confs)
+                student_ids = list(self.last_student_ids) 
+            
+            # (Phần logic vẽ giữ nguyên)
+            img_pil = None
+            draw = None
             try:
-                self.writer.write(frame)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img_pil = Image.fromarray(frame_rgb)
+                draw = ImageDraw.Draw(img_pil)
             except Exception as e:
-                print(f"Lỗi khi ghi frame: {e}")
-                self.toggle_record() 
+                img_pil = None 
+            for i, ((x1,y1,x2,y2), detc) in enumerate(zip(boxes, scores)):
+                name = names[i] if i < len(names) else UNKNOWN_NAME
+                simc = confs[i] if i < len(confs) else 0.0
+                student_id = student_ids[i] if i < len(student_ids) else None
+                color=(0,255,0) if name!=UNKNOWN_NAME else (0,0,255)
+                display_name = name.split(" ")[-1] if name != UNKNOWN_NAME else UNKNOWN_NAME
+                id_str = str(student_id) if student_id else '?'
+                text_to_draw = f"ID: {id_str} | {display_name} {simc:.2f}"
+                cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
+                if img_pil and draw and self.pil_font:
+                    try:
+                        frame_rgb_with_rect = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        img_pil = Image.fromarray(frame_rgb_with_rect)
+                        draw = ImageDraw.Draw(img_pil)
+                        draw.text((x1 + 2, max(0, y1 - 20)), text_to_draw, font=self.pil_font, fill=color)
+                        frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                    except Exception as e:
+                        cv2.putText(frame, text_to_draw,
+                            (x1, max(20,y1-8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                else:
+                    cv2.putText(frame, text_to_draw,
+                            (x1, max(20,y1-8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        imgtk = ImageTk.PhotoImage(Image.fromarray(img))
-        self.left_panel.imgtk = imgtk; self.left_panel.config(image=imgtk, text=None) 
+            # (Logic này vẫn an toàn, vì self.last_analysis có thể là None)
+            if self.last_analysis is not None:
+                frame = self.analyzer.draw_analysis_info(frame, self.last_analysis)
 
-        # --- CẬP NHẬT TREEVIEW (Không thay đổi) ---
-        try:
-            analysis = self.last_analysis if self.last_analysis is not None else {}
-            face_states = analysis.get('face_states', []) if isinstance(analysis, dict) else []
-            behs = analysis.get('behaviors', []) if isinstance(analysis, dict) else []
+            if self.recording and self.writer is not None:
+                try: self.writer.write(frame)
+                except Exception as e: self.toggle_record() 
+
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            imgtk = ImageTk.PhotoImage(Image.fromarray(img))
+            self.left_panel.imgtk = imgtk; self.left_panel.config(image=imgtk, text=None) 
 
             try:
+                # (Logic này vẫn an toàn, vì self.last_analysis có thể là None)
+                analysis = self.last_analysis if self.last_analysis is not None else {}
+                face_states = analysis.get('face_states', []) if isinstance(analysis, dict) else []
+                
+                current_time = time.time()
+                self.focus_logs.clear() 
+                
+                # (is_paused đã được kiểm tra ở đầu hàm)
+                
+                for i, student_id_db in enumerate(student_ids): 
+                    manager_id = student_id_db
+                    if manager_id is None:
+                        manager_id = f"temp_face_{i}"
+                    
+                    # (Logic ghi nhận 'appear' giữ nguyên)
+                    if self.current_session_id is not None and student_id_db is not None:
+                        if student_id_db not in self.session_appeared_students:
+                            try:
+                                print(f"Ghi nhận {student_id_db} cho session {self.current_session_id}")
+                                database.mark_student_appearance(self.current_session_id, student_id_db)
+                                self.session_appeared_students.add(student_id_db)
+                            except Exception as e:
+                                print(f"Lỗi khi ghi nhận (appear) student {student_id_db}: {e}")
+                    
+                    
+                    try:
+                        # (Nếu analysis là {}, face_states là [], fs sẽ là {})
+                        fs = face_states[i] if i < len(face_states) else {}
+                        head_state_list = fs.get('head_orientation', {}).get('states', [])
+                        head_state = head_state_list[0] if head_state_list else 'HEAD_STRAIGHT'
+                        eye_state = fs.get('eye_state', ("NO_FACE", 0))[0]
+                        behaviors_list = []
+                        if fs.get('behaviors'):
+                            behaviors_list = [b.get('label', 'unknown') for b in fs['behaviors']]
+                        
+                        # (Không cần 'if not is_paused' nữa)
+                        new_points, logs = self.focus_manager.update_student_score(
+                            manager_id, behaviors_list, head_state, eye_state, current_time
+                        )
+                        
+                        if logs:
+                            self.focus_logs[manager_id] = logs 
+                    except Exception as e:
+                        print(f"Lỗi khi cập nhật điểm cho {manager_id}: {e}")
+
+                # (Phần cập nhật Treeview và ngắt dòng)
                 for item in self.info_tree.get_children():
                     self.info_tree.delete(item)
 
                 for i, name in enumerate(names):
                     student_id = student_ids[i] if i < len(student_ids) else None
                     id_str = str(student_id) if student_id else ''
+                    manager_id_for_display = student_id if student_id else f"temp_face_{i}"
+                    current_score = self.focus_manager.get_student_score(manager_id_for_display)
                     
-                    fs = face_states[i] if i < len(face_states) else None
-                    
-                    beh_list = []
-                    if fs and 'behaviors' in fs and fs['behaviors']: beh_list = fs['behaviors']
-                    elif fs and 'behavior' in fs and fs['behavior'] is not None: beh_list = [fs['behavior']]
-                    elif i < len(behs) and behs[i] is not None: beh_list = [behs[i]]
-                    try:
-                        beh_label = ", ".join(f"{b.get('label','')} {b.get('conf',0.0):.2f}" for b in beh_list) if beh_list else ''
-                    except Exception: beh_label = ''
+                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    # >>> [SỬA LỖI HIỂN THỊ TIMER] Bắt đầu tại đây <<<
+                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-                    eye_txt = "NO_FACE"; mouth_txt = "NO_FACE"; head_txt = ""; alerts_txt = ""
-                    if fs:
+                    # 1. Lấy danh sách hành vi ĐANG PHÁT HIỆN (ví dụ: 'writing')
+                    # (fs sẽ là {} nếu analysis tắt, logic này vẫn đúng)
+                    fs = face_states[i] if i < len(face_states) else {} 
+                    detected_behavior_labels = set()
+                    detection_display_str = ""
+                    if fs and 'behaviors' in fs and fs['behaviors']:
+                        beh_list = fs['behaviors']
+                        detected_behavior_labels = {b.get('label','unknown') for b in beh_list}
+                        detection_display_str = ", ".join(f"{b.get('label','')} {b.get('conf',0.0):.2f}" for b in beh_list)
+                    
+                    # 2. Lấy TẤT CẢ timer từ manager
+                    timers = self.focus_manager.get_student_timers(manager_id_for_display)
+                    timer_strings = []
+                    
+                    # 3. [SỬA THEO YÊU CẦU MỚI]
+                    # Định nghĩa các timer "LUÔN HIỂN THỊ" (nếu > 0)
+                    ALWAYS_SHOW_TIMERS = {
+                        'EYES_OPEN', 'EYES_CLOSING', 
+                        'HEAD_STRAIGHT', 'HEAD_LEFT', 'HEAD_RIGHT', 
+                        'good_focus',
+                        'reading', 'writing', 'upright' # <<< THÊM 3 HÀNH VI NÀY
+                    }
+
+                    # 4. Lọc xung đột (giữ nguyên)
+                    eye_open_time = timers.get('EYES_OPEN', 0.0)
+                    eye_close_time = timers.get('EYES_CLOSING', 0.0)
+                    head_straight_time = timers.get('HEAD_STRAIGHT', 0.0)
+                    head_left_time = timers.get('HEAD_LEFT', 0.0)
+                    head_right_time = timers.get('HEAD_RIGHT', 0.0)
+
+                    # 5. Lặp và lọc timer
+                    for behavior_name, time_val in sorted(timers.items()):
+                        if time_val > 0:
+                            # Lọc xung đột (giữ nguyên)
+                            if behavior_name == 'EYES_OPEN' and eye_close_time > 0: continue
+                            if behavior_name == 'EYES_CLOSING' and eye_open_time > 0: continue
+                            if behavior_name == 'HEAD_STRAIGHT' and (head_left_time > 0 or head_right_time > 0): continue
+                            if behavior_name == 'HEAD_LEFT' and head_straight_time > 0: continue
+                            if behavior_name == 'HEAD_RIGHT' and head_straight_time > 0: continue
+                                
+                            # [SỬA MỚI] Logic hiển thị timer
+                            is_always_show_timer = behavior_name in ALWAYS_SHOW_TIMERS
+                            
+                            behavior_label_check = behavior_name.split(' ')[0] 
+                            is_detected_behavior = behavior_label_check in detected_behavior_labels
+
+                            # Chỉ thêm vào nếu nó là TRẠNG THÁI (luôn hiển thị) 
+                            # HOẶC là HÀNH VI ĐANG PHÁT HIỆN
+                            if is_always_show_timer or is_detected_behavior:
+                                timer_strings.append(f"{behavior_name.replace('_', ' ')} ({time_val:.1f}s)")
+                    
+                    timer_display_str = ", ".join(timer_strings)
+
+                    # 6. Tạo chuỗi hiển thị (giữ nguyên logic gốc của bạn)
+                    final_behavior_str = ""
+                    if detection_display_str and timer_display_str:
+                        final_behavior_str = f"{detection_display_str} | T: [{timer_display_str}]"
+                    elif detection_display_str: final_behavior_str = detection_display_str
+                    elif timer_display_str: final_behavior_str = f"T: [{timer_display_str}]"
+                    
+                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    # >>> [SỬA LỖI] Kết thúc tại đây <<<
+                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    
+                    # (fs đã được lấy ở trên, an toàn nếu analysis tắt)
+                    eye_txt = "NO_FACE"
+                    head_txt = "N/A"
+                    alerts_txt = ""
+                    if fs: 
                         eye_txt = fs.get('eye_state', ("NO_FACE", 0))[0]
-                        mouth_txt = fs.get('mouth_state', ("NO_FACE", 0))[0]
                         head_states = fs.get('head_orientation', {}).get('states', [])
                         head_txt = ",".join(head_states) if head_states else 'HEAD_STRAIGHT'
-                        alerts_for_face = fs.get('alerts', []) if fs.get('alerts') is not None else []
-                        alerts_txt = ", ".join(alerts_for_face)
-
-                    beh_txt = beh_label
-                    row_tag = 'row_even' if (i % 2) == 0 else 'row_odd'
-                    MAX_ALERT_COL_CHARS = 80
-                    alert_chunks = []
-                    if alerts_txt:
-                        try:
-                            wrapped = textwrap.wrap(alerts_txt, width=MAX_ALERT_COL_CHARS)
-                            alert_chunks = wrapped if wrapped else [alerts_txt]
-                        except Exception:
-                            parts = [p.strip() for p in alerts_txt.split(',') if p.strip()]
-                            cur = ''
-                            for p in parts:
-                                if not cur: cur = p
-                                elif len(cur) + 2 + len(p) <= MAX_ALERT_COL_CHARS: cur = cur + ', ' + p
-                                else: alert_chunks.append(cur); cur = p
-                            if cur: alert_chunks.append(cur)
+                        focus_alerts = self.focus_logs.get(manager_id_for_display, [])
+                        behavior_alerts = fs.get('alerts', []) if fs.get('alerts') is not None else []
+                        alerts_txt = ", ".join(focus_alerts + behavior_alerts)
                     else:
-                        alert_chunks = []
-
-                    first_alert = alert_chunks[0] if alert_chunks else ''
+                        # (Nếu fs rỗng, gán giá trị mặc định khi không phân tích)
+                        eye_txt = "N/A" 
+                        head_txt = "N/A"
+                        
+                    # (Logic ngắt dòng giữ nguyên)
+                    row_tag = 'row_even' if (i % 2) == 0 else 'row_odd'
+                    MAX_BEHAVIOR_COL_CHARS = 90
+                    behavior_chunks = []
+                    if final_behavior_str:
+                        try:
+                            wrapped = textwrap.wrap(final_behavior_str, width=MAX_BEHAVIOR_COL_CHARS, break_long_words=True)
+                            behavior_chunks = wrapped if wrapped else [final_behavior_str]
+                        except Exception: behavior_chunks = [final_behavior_str] 
+                    else:
+                         behavior_chunks = ['']
+                    first_behavior = behavior_chunks[0]
                     
-                    values = (id_str, str(i+1), name, eye_txt, mouth_txt, head_txt, beh_txt, first_alert)
+                    values = (id_str, str(i+1), name, current_score, eye_txt, head_txt, first_behavior)
                     tags = [row_tag]
-                    if first_alert:
-                        tags.append('has_alert')
+                    if alerts_txt: tags.append('has_alert')
                     self.info_tree.insert('', 'end', values=values, tags=tuple(tags))
 
-                    for ac in alert_chunks[1:]:
-                        cont_vals = ('', '', '', '', '', '', '', ac) 
-                        cont_tags = [row_tag, 'continuation', 'has_alert']
+                    for k in range(1, len(behavior_chunks)):
+                        cont_vals = ('', '', '', '', '', '', behavior_chunks[k]) 
+                        cont_tags = [row_tag, 'continuation']
+                        if alerts_txt: cont_tags.append('has_alert')
                         self.info_tree.insert('', 'end', values=cont_vals, tags=tuple(cont_tags))
-            except Exception:
-                pass
+
+            except Exception as e:
+                print(f"Lỗi nghiêm trọng trong khi cập nhật Treeview: {e}")
+                traceback.print_exc()
+            
+            # (Đã chuyển kiểm tra 'is_running' lên đầu)
+            self.after_id = self.root.after(16, self.gui_loop)
+                
+        except tk.TclError as e:
+            if "invalid command name" in str(e): print("gui_loop: Đã bắt lỗi TclError (widget đã bị hủy), dừng vòng lặp.")
+            else:
+                if self.running: print(f"gui_loop: Lỗi TclError không xác định: {e}"); traceback.print_exc()
         except Exception as e:
-            # print(f"Lỗi GUI loop: {e}")
-            pass
-        # --- HẾT SỬA TREEVIEW ---
+            if self.running: print(f"gui_loop: Lỗi nghiêm trọng: {e}"); traceback.print_exc()
+
+    # ===================================================================
+    # >>> CÁC HÀM MỚI ĐỂ XỬ LÝ KẾT THÚC SESSION <<<
+    # ===================================================================
+
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # >>> [SỬA LỖI NULL] TÁCH BIỆT HOÀN TOÀN LUỒNG AI <<<
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    def finalize_session(self):
+        """Lưu kết quả của session hiện tại vào CSDL. Được gọi bởi stop() và on_close()."""
         
-        self.root.after(16, self.gui_loop)
+        # 1. Kiểm tra xem có session nào đang chạy không
+        if self.current_session_id is None:
+            return 
+        
+        # 2. Lấy session_id và reset ngay lập tức để tránh gọi lại
+        session_to_finalize = self.current_session_id
+        start_time_to_finalize = self.session_start_time
+        students_to_finalize = self.session_appeared_students.copy()
+        
+        # RẤT QUAN TRỌNG: Đặt lại ngay lập tức
+        self.current_session_id = None 
+        self.session_start_time = None
+        self.session_appeared_students = set()
+        
+        print(f"Đang kết thúc session {session_to_finalize}...")
+        
+        # 3. Tính toán thời gian
+        end_time = datetime.now()
+        session_duration_sec = 0
+        if start_time_to_finalize:
+            session_duration_sec = time.time() - start_time_to_finalize
+        
+        # 4. Cập nhật bảng 'session' (end_time) - NHANH
+        try:
+            database.end_session(session_to_finalize, end_time)
+        except Exception as e:
+            print(f"Lỗi khi cập nhật end_time cho session: {e}")
+            traceback.print_exc()
+
+        # 5. Kiểm tra xem có học sinh nào không
+        if not students_to_finalize:
+            print("Session kết thúc, không có học sinh nào được ghi nhận.")
+            return
+
+        # 6. HIỂN THỊ THÔNG BÁO NGAY
+        messagebox.showinfo("Đang xử lý", f"Đang lưu kết quả session {session_to_finalize} cho {len(students_to_finalize)} học sinh...\n(Ghi chú AI sẽ được xử lý ngầm)", parent=self.root)
+
+        # 7. [SỬA MỚI] Thu thập TẤT CẢ dữ liệu từ focus_manager TRƯỚC KHI BẮT ĐẦU LUỒNG
+        # Đây là bước quan trọng để tránh xung đột luồng.
+        
+        student_data_for_thread = []
+        print("Thu thập dữ liệu từ FocusManager (trên luồng chính)...")
+        for student_id in students_to_finalize:
+            if student_id is None: continue
+            manager_id = student_id
+            
+            try:
+                # Lấy dữ liệu an toàn từ luồng chính
+                focus_point = self.focus_manager.get_student_score(manager_id)
+                rate = self.calculate_rate(focus_point, session_duration_sec)
+                logs = self.focus_manager.get_student_full_logs(manager_id)
+                
+                # Đóng gói dữ liệu tĩnh
+                student_data_for_thread.append({
+                    "student_id": student_id,
+                    "focus_point": focus_point,
+                    "rate": rate,
+                    "logs": logs
+                })
+            except Exception as e:
+                print(f"Lỗi khi thu thập dữ liệu cho student {student_id} (luồng chính): {e}")
+                traceback.print_exc()
+        
+        # 8. [SỬA MỚI] Hàm chạy ngầm, giờ chỉ nhận dữ liệu đã thu thập
+        # Nó sẽ tự gọi AI và tự cập nhật CSDL
+        def background_ai_and_db_writer_task(data_list, s_id_to_finalize):
+            print(f"Bắt đầu luồng nền để xử lý {len(data_list)} học sinh cho Session {s_id_to_finalize}.")
+            
+            for data in data_list:
+                # Lấy dữ liệu đã thu thập (an toàn)
+                student_id = data["student_id"]
+                focus_point = data["focus_point"]
+                rate = data["rate"]
+                logs = data["logs"]
+                note = "Không có ghi nhận chi tiết." # Note mặc định
+                
+                try:
+                    # 8a. Gọi AI (trong luồng nền)
+                    if not logs:
+                        note = "Không có ghi nhận chi tiết."
+                    else:
+                        try:
+                            print(f"Bắt đầu gọi AI cho student {student_id} (luồng nền)...")
+                            note = ai_summarizer.summarize_focus_logs(logs) # Đây là hàm duy nhất có thể gây lỗi
+                            print(f"AI hoàn tất cho student {student_id} (luồng nền). Note: {note}")
+                        except BaseException as e: # Bắt lỗi nghiêm trọng nhất
+                            print(f"Lỗi nghiêm trọng khi gọi AI cho {student_id} (luồng nền):")
+                            traceback.print_exc()
+                            note = f"Lỗi AI: {str(e)}" 
+
+                    # 8b. Cập nhật CSDL (trong luồng nền)
+                    database.update_focus_record(
+                        s_id_to_finalize,
+                        student_id,
+                        focus_point,
+                        rate,
+                        note
+                    )
+                    print(f"Đã cập nhật CSDL cho student {student_id} (luồng nền).")
+                    
+                except Exception as e:
+                    # Lỗi này là lỗi chung của vòng lặp (ví dụ update_focus_record bị lỗi)
+                    print(f"Lỗi nghiêm trọng trong vòng lặp luồng nền cho student {student_id}: {e}")
+                    traceback.print_exc()
+            
+            print(f"--- LUỒNG NỀN HOÀN TẤT (Session {s_id_to_finalize}) ---")
+        
+        # 9. TẠO VÀ CHẠY LUỒNG NỀN
+        # (Truyền dữ liệu đã thu thập và session_id vào)
+        db_thread = threading.Thread(target=background_ai_and_db_writer_task, args=(student_data_for_thread, session_to_finalize), daemon=True)
+        db_thread.start()
+        
+        # 10. HÀM FINALIZE_SESSION KẾT THÚC NGAY LẬP TỨC
+        print(f"Đã kích hoạt luồng nền. Hàm finalize_session thoát.")
+
+
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # >>> [SỬA 1] SỬA LỖI TÍNH TỈ LỆ (RATE) <<<
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    def calculate_rate(self, score, duration_sec):
+        """Tính toán rate dựa trên điểm và tỉ lệ thời gian chuẩn 45 phút."""
+        
+        STANDARD_DURATION_SEC = 45 * 60 # 45 phút * 60 giây = 2700 giây
+        
+        prorated_score = score
+        
+        # [SỬA] Sửa 'duration_sec > 60' thành 'duration_sec > 5'
+        # để đảm bảo các buổi học ngắn (như 58s) vẫn được tính tỉ lệ.
+        if duration_sec > 5: 
+            scaling_factor = STANDARD_DURATION_SEC / duration_sec
+            prorated_score = score * scaling_factor
+            print(f"Student ID: {score}, Thời gian: {duration_sec:.1f}s, Điểm gốc: {score}, Điểm tỉ lệ (45p): {prorated_score:.2f}")
+        else:
+            # Nếu buổi học quá ngắn, không tỉ lệ
+            print(f"Student ID: {score}, Thời gian quá ngắn (< 5s), dùng điểm gốc: {score}")
+
+        # (Ngưỡng điểm giữ nguyên như bạn đã chấp nhận)
+        if prorated_score >= 12:
+            return 'Cao độ'
+        elif prorated_score >= 9:
+            return 'Tốt'
+        elif prorated_score >= 5: 
+            return 'Trung bình'
+        else:
+            return 'Thấp'
+
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # >>> [SỬA 2] XÓA HÀM CŨ <<<
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # (Đã xóa hàm 'generate_note_from_logs' ở đây)
+
 
     # ===================================================================
     # CÁC HÀM CÒN LẠI (Không thay đổi)
     # ===================================================================
     
     def enroll_one(self):
+        # (Hàm này giữ nguyên)
         with self.det_lock:
             if len(self.last_boxes)==0:
                 messagebox.showwarning("Thông báo","Chưa thấy khuôn mặt nào."); return
         self.enrolling=True; self.set_status("CLICK vào khuôn mặt để đăng ký...")
 
     def on_click_face(self, event):
+        # (Hàm này giữ nguyên)
         if not self.enrolling: return
         x,y=int(event.x),int(event.y)
-        
         with self.det_lock, self.frame_lock:
             boxes=list(self.last_boxes)
             frame=self.latest_frame.copy() if self.latest_frame is not None else None
-        
         if frame is None or len(boxes)==0:
             self.set_status("Chưa có frame/không có mặt."); self.enrolling=False; return
-            
         chosen, area=-1, -1
         for i,(x1,y1,x2,y2) in enumerate(boxes):
             if x1<=x<=x2 and y1<=y<=y2:
                 a=(x2-x1)*(y2-y1)
                 if a>area: area=a; chosen=i
-                
         if chosen<0:
             self.set_status("Không trúng khuôn mặt nào."); return
-
         self.enrolling = False 
         box = boxes[chosen]
-
-        # --- BƯỚC 1: HIỂN THỊ HỘP THOẠI MỚI (Đã cải tiến) ---
         dialog = EnrollmentDialog(self.root)
         info = dialog.result 
-
         if info is None: 
             self.set_status("Hủy đăng ký."); return
-            
         name = info['name']
         gender = info['gender']
         birthday = info['birthday']
+        
+        # [SỬA] Đặt lớp mặc định khi đăng ký
         class_name = "lớp A" 
-
+        
         self.set_status(f"Đang xử lý đăng ký cho {name}...")
-
-        # --- BƯỚC 2: TRÍCH XUẤT EMBEDDING ---
         emb, idx = self.recog.embed_batch(frame, np.array([box]))
         if emb is None:
             messagebox.showerror("Lỗi", "Không trích xuất được embedding. \nHãy thử lại với góc mặt rõ hơn.")
             self.set_status("Lỗi trích xuất embedding."); return
-        
         face_embedding = emb[0] 
-
-        # --- BƯỚC 3: LƯU HỌC SINH VÀO CSDL MYSQL ĐỂ LẤY ID ---
+        
         new_student_id, msg = database.add_student(name, class_name, gender, birthday, avartar_url=None)
-
+        
         if new_student_id is None:
             messagebox.showerror("Lỗi CSDL", f"Không thể tạo học sinh:\n{msg}")
             self.set_status("Lỗi CSDL khi tạo học sinh."); return
-
-        # --- BƯỚC 4: LƯU ẢNH CROP (SỬ DỤNG ID MỚI) ---
+            
         face_path = None 
         try:
             (x1,y1,x2,y2) = box
             face_crop = frame[y1:y2, x1:x2]
-            
             face_dir = os.path.splitext(DB_PATH_DEFAULT)[0] + "_images"
             os.makedirs(face_dir, exist_ok=True) 
-            
             face_path_rel = os.path.join(face_dir, f"face_{new_student_id}.jpg")
             face_path_abs = os.path.join(BASE_DIR, face_path_rel) 
             cv2.imwrite(face_path_abs, face_crop)
-            
             face_path = face_path_rel
-            
             database.update_student_avatar(new_student_id, face_path)
-            
         except Exception as e:
             messagebox.showerror("Lỗi Lưu Ảnh", f"Không thể lưu ảnh crop: {e}")
-
-        # --- BƯỚC 5: LIÊN KẾT EMBEDDING TRONG CSDL ---
-        embedding_name = f"student_{new_student_id}"
+        
+        embedding_name = str(new_student_id)
+        
         ok, msg = database.link_face_embedding(new_student_id, embedding_name, face_path)
         if not ok:
            messagebox.showwarning("Lỗi CSDL", f"Lỗi khi liên kết embedding: {msg}")
-
-        # --- BƯỚC 6: LƯU VÀO FILE .NPZ (LƯU ID THAY VÌ TÊN) ---
-        self.recog.add_face(str(new_student_id), face_embedding) 
+           
+        self.recog.add_face(embedding_name, face_embedding) 
         
         try:
             db_path_full = os.path.join(BASE_DIR, DB_PATH_DEFAULT)
             self.recog.save_db(db_path_full) 
             self.set_status(f"Đã đăng ký & lưu: {name} (ID: {new_student_id}) (gallery={len(self.recog.names)})")
-            
             self.id_to_name_cache[new_student_id] = name
-            
         except Exception as e:
             messagebox.showerror("Lỗi Lưu DB", f"Đăng ký thành công, nhưng lỗi khi lưu file .npz:\n{e}")
             self.set_status(f"Đăng ký: {name} (ID: {new_student_id}) - LỖI LƯU FILE .NPZ")
-        
+            
         self.sticky={'box':box, 'name':name, 'id': new_student_id, 'ttl':30}
         self.force_recog_frames=20
     
-    # --- HẾT HÀM ON_CLICK_FACE ---
-
-    # Recording
     def _open_writer(self, path, fps):
+        # (Hàm này giữ nguyên)
         fourcc=cv2.VideoWriter_fourcc(*'mp4v')
         self.writer=cv2.VideoWriter(path, fourcc, float(fps), (VIEW_W, VIEW_H))
         if not self.writer.isOpened():
@@ -892,21 +1208,21 @@ class Camera(ttk.Frame):
             raise RuntimeError("Không mở được VideoWriter.")
 
     def _close_writer(self):
+        # (Hàm này giữ nguyên)
         if self.writer is not None:
             try: self.writer.release()
             except: pass
             self.writer=None
 
     def toggle_record(self):
+        # (Hàm này giữ nguyên)
         if not self.running:
-             messagebox.showwarning("Thông báo", "Phải bật video hoặc webcam trước khi ghi.")
-             return
-             
+                   messagebox.showwarning("Thông báo", "Phải bật video hoặc webcam trước khi ghi.")
+                   return
         if not self.recording:
             path=filedialog.asksaveasfilename(defaultextension=".mp4", initialfile=self.out_path,
-                                             filetypes=[("MP4","*.mp4"),("AVI","*.avi"),("All","*.*")])
+                                                filetypes=[("MP4","*.mp4"),("AVI","*.avi"),("All","*.*")])
             if not path: return
-            
             self.out_path=path 
             try: self._open_writer(self.out_path, self.out_fps)
             except Exception as e: messagebox.showerror("Lỗi", str(e)); return
@@ -915,23 +1231,63 @@ class Camera(ttk.Frame):
             self._close_writer(); self.recording=False
             self.set_status(f"Đã dừng ghi. Lưu tại: {self.out_path}")
 
-    # on_close
-    def on_close(self, force=False): 
-        if force:
-            print("Đang đóng camera (bắt buộc)...")
-            self.stop() 
-            try: self.destroy() 
-            except Exception: pass
-            return
-
+    # (Hàm on_close_app giữ nguyên)
+    def on_close_app(self):
         if messagebox.askokcancel("Thoát", "Bạn có chắc muốn thoát ứng dụng?"):
-            print("Đang đóng ứng dụng...")
-            self.stop() 
+            print("Đang đóng ứng dụng (từ nút X)...")
+            
+            self.on_close(force=True) 
+            
+            if hasattr(self, 'root') and self.root:
+                try:
+                    self.root.destroy()
+                except Exception as e:
+                    print(f"Lỗi khi destroy root: {e}")
+
+    # (Hàm on_close giữ nguyên)
+    def on_close(self, force=False): 
+        try:
+            if force: 
+                print("Đang chạy Camera.on_close(force=True)...")
+                
             try:
-                if hasattr(self, 'root') and self.root is not None:
-                    self.root.after(100, self.root.destroy) 
+                self.finalize_session()
             except Exception as e:
-                print(f"Lỗi khi đóng cửa sổ root: {e}")
-                if hasattr(self, 'root') and self.root is not None:
-                    try: self.root.destroy()
-                    except: pass
+                print(f"Lỗi khi finalize_session trong on_close: {e}")
+                traceback.print_exc()
+
+            # (Phần còn lại giữ nguyên)
+            self.running = False 
+            
+            # (# === SỬA ĐỔI 6: Đảm bảo cờ tắt khi đóng ===)
+            self.enable_behavior_analysis = False
+            
+            if hasattr(self, 'after_id') and self.after_id:
+                try:
+                    self.root.after_cancel(self.after_id)
+                    self.after_id = None
+                    print("- Đã hủy vòng lặp 'after' (gui_loop).")
+                except Exception as e:
+                    print(f"Lỗi khi hủy 'after': {e}")
+            try:
+                if hasattr(self, 'capture_thread_handle') and self.capture_thread_handle and self.capture_thread_handle.is_alive():
+                    self.capture_thread_handle.join(timeout=1.0) 
+                    print("- Đã join Capture Thread.")
+            except Exception as e:
+                print(f"Lỗi khi join capture_thread: {e}")
+            try:
+                if hasattr(self, 'infer_thread_handle') and self.infer_thread_handle and self.infer_thread_handle.is_alive():
+                    self.infer_thread_handle.join(timeout=1.0) 
+                    print("- Đã join Infer Thread.")
+            except Exception as e:
+                print(f"Lỗi khi join infer_thread: {e}")
+            if hasattr(self, 'cap') and self.cap and self.cap.isOpened():
+                self.cap.release()
+                self.cap = None
+                print("- Đã giải phóng VideoCapture.")
+            self._close_writer()
+            print("- Đã đóng VideoWriter (nếu có).")
+            print("Camera.on_close() hoàn tất an toàn.")
+        except Exception as e:
+            print(f"!!! LỖI NGHIÊM TRỌNG TRONG KHI on_close: {e}")
+            traceback.print_exc()
