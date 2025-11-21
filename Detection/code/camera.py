@@ -15,7 +15,7 @@ import database
 import os
 
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-# >>> [SỬA 2] THÊM IMPORT MODULE AI <<<
+# >>> [SỬA 2] THÊM IMPORT MODULE AI <<<\
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 import ai_summarizer
 
@@ -54,6 +54,7 @@ OUT_VIDEO_DEFAULT = "video_output.mp4"
 
 # ===================================================================
 # LỚP HỘP THOẠI TÙY CHỈNH (Không thay đổi)
+# ... (Code EnrollmentDialog giữ nguyên)
 # ===================================================================
 class EnrollmentDialog(simpledialog.Dialog):
     """Hộp thoại tùy chỉnh để nhập thông tin sinh viên."""
@@ -371,7 +372,9 @@ class Camera(ttk.Frame):
             )
 
             print(f"Áp dụng TARGET_FPS ({TARGET_FPS}) cho video.")
-            self.period = 1.0 / TARGET_FPS
+            
+            SLOW_FACTOR = 1.5
+            self.period = (1.0 / TARGET_FPS) * SLOW_FACTOR
             
             # Vẫn cố gắng lấy fps gốc để GHI VIDEO (out_fps)
             fps_goc = self.cap.get(cv2.CAP_PROP_FPS)
@@ -485,6 +488,7 @@ class Camera(ttk.Frame):
     # (Hàm stop giữ nguyên)
     def stop(self):
         try:
+            # GỌI HÀM ĐỒNG BỘ MỚI
             self.finalize_session()
         except Exception as e:
             print(f"Lỗi khi finalize_session: {e}")
@@ -523,7 +527,7 @@ class Camera(ttk.Frame):
         self.capture_thread_handle = None
         self.infer_thread_handle = None
 
-    # (Hàm capture_thread giữ nguyên)
+    # (Hàm capture_thread, infer_thread, gui_loop... giữ nguyên)
     def capture_thread(self):
         print("Capture thread đã bắt đầu.") 
         while self.running:
@@ -563,7 +567,6 @@ class Camera(ttk.Frame):
                 self.running = False
         print("Capture thread đã thoát.")
             
-    # (Hàm _handle_video_end giữ nguyên)
     def _handle_video_end(self):
         try:
             if self.mode == 'video':
@@ -574,7 +577,6 @@ class Camera(ttk.Frame):
         except tk.TclError:
             pass 
             
-    # (Hàm infer_thread giữ nguyên)
     def infer_thread(self):
         print("Infer thread đã bắt đầu.") 
         while self.running:
@@ -676,19 +678,14 @@ class Camera(ttk.Frame):
         print("Infer thread đã thoát.")
 
 
-    
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    # >>> [SỬA LẦN 3] HÀM GUI_LOOP (SỬA LOGIC HIỂN THỊ TIMER) <<<
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     def gui_loop(self):
         
         try:
-            # Lấy trạng thái MỘT LẦN
             is_running = self.running 
             is_paused = self.paused
             
             frame = None
-            if is_running: # Chỉ lấy frame nếu đang chạy
+            if is_running: 
                 with self.frame_lock:
                     if self.latest_frame is not None:
                         frame = self.latest_frame.copy()
@@ -697,31 +694,26 @@ class Camera(ttk.Frame):
             if not is_running:
                 self.left_panel.config(text="Sẵn sàng. Hãy 'Chọn video' hoặc 'Mở Webcam'.", image=None)
                 try:
-                    # Xóa bảng
                     for item in self.info_tree.get_children():
                         self.info_tree.delete(item)
                 except tk.TclError: 
                     pass
-                # Hủy vòng lặp 'after' (nếu còn)
                 if self.after_id:
                     self.root.after_cancel(self.after_id)
                     self.after_id = None
-                return # Dừng hàm gui_loop tại đây
+                return 
 
             # --- B. ĐANG CHẠY, NHƯNG BỊ PAUSE (hoặc chưa có frame) ---
             if frame is None or is_paused:
                 if is_paused:
-                    # Giữ nguyên frame cuối, chỉ đổi text
                     self.left_panel.config(text="Đã tạm dừng. Bấm 'Phát Video' để tiếp tục.")
-                else: # Đang chạy, chưa có frame
+                else: 
                     self.left_panel.config(text="Đang tải...", image=None)
                 
-                # Không cập nhật timer, nhưng tiếp tục vòng lặp
                 self.after_id = self.root.after(16, self.gui_loop)
-                return # Dừng xử lý frame này, đợi frame tiếp
+                return 
 
             # --- C. ĐANG CHẠY, KHÔNG PAUSE, CÓ FRAME ---
-            # (Đây là logic xử lý chính)
             
             with self.det_lock, self.id_lock:
                 boxes=list(self.last_boxes); scores=list(self.last_scores)
@@ -760,7 +752,6 @@ class Camera(ttk.Frame):
                     cv2.putText(frame, text_to_draw,
                             (x1, max(20,y1-8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            # (Logic này vẫn an toàn, vì self.last_analysis có thể là None)
             if self.last_analysis is not None:
                 frame = self.analyzer.draw_analysis_info(frame, self.last_analysis)
 
@@ -773,21 +764,17 @@ class Camera(ttk.Frame):
             self.left_panel.imgtk = imgtk; self.left_panel.config(image=imgtk, text=None) 
 
             try:
-                # (Logic này vẫn an toàn, vì self.last_analysis có thể là None)
                 analysis = self.last_analysis if self.last_analysis is not None else {}
                 face_states = analysis.get('face_states', []) if isinstance(analysis, dict) else []
                 
                 current_time = time.time()
                 self.focus_logs.clear() 
                 
-                # (is_paused đã được kiểm tra ở đầu hàm)
-                
                 for i, student_id_db in enumerate(student_ids): 
                     manager_id = student_id_db
                     if manager_id is None:
                         manager_id = f"temp_face_{i}"
                     
-                    # (Logic ghi nhận 'appear' giữ nguyên)
                     if self.current_session_id is not None and student_id_db is not None:
                         if student_id_db not in self.session_appeared_students:
                             try:
@@ -799,7 +786,6 @@ class Camera(ttk.Frame):
                     
                     
                     try:
-                        # (Nếu analysis là {}, face_states là [], fs sẽ là {})
                         fs = face_states[i] if i < len(face_states) else {}
                         head_state_list = fs.get('head_orientation', {}).get('states', [])
                         head_state = head_state_list[0] if head_state_list else 'HEAD_STRAIGHT'
@@ -808,7 +794,6 @@ class Camera(ttk.Frame):
                         if fs.get('behaviors'):
                             behaviors_list = [b.get('label', 'unknown') for b in fs['behaviors']]
                         
-                        # (Không cần 'if not is_paused' nữa)
                         new_points, logs = self.focus_manager.update_student_score(
                             manager_id, behaviors_list, head_state, eye_state, current_time
                         )
@@ -828,12 +813,8 @@ class Camera(ttk.Frame):
                     manager_id_for_display = student_id if student_id else f"temp_face_{i}"
                     current_score = self.focus_manager.get_student_score(manager_id_for_display)
                     
-                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    # >>> [SỬA LỖI HIỂN THỊ TIMER] Bắt đầu tại đây <<<
-                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-                    # 1. Lấy danh sách hành vi ĐANG PHÁT HIỆN (ví dụ: 'writing')
-                    # (fs sẽ là {} nếu analysis tắt, logic này vẫn đúng)
+                    # (Logic hiển thị timer)
+                    
                     fs = face_states[i] if i < len(face_states) else {} 
                     detected_behavior_labels = set()
                     detection_display_str = ""
@@ -842,61 +823,45 @@ class Camera(ttk.Frame):
                         detected_behavior_labels = {b.get('label','unknown') for b in beh_list}
                         detection_display_str = ", ".join(f"{b.get('label','')} {b.get('conf',0.0):.2f}" for b in beh_list)
                     
-                    # 2. Lấy TẤT CẢ timer từ manager
                     timers = self.focus_manager.get_student_timers(manager_id_for_display)
                     timer_strings = []
                     
-                    # 3. [SỬA THEO YÊU CẦU MỚI]
-                    # Định nghĩa các timer "LUÔN HIỂN THỊ" (nếu > 0)
                     ALWAYS_SHOW_TIMERS = {
                         'EYES_OPEN', 'EYES_CLOSING', 
                         'HEAD_STRAIGHT', 'HEAD_LEFT', 'HEAD_RIGHT', 
                         'good_focus',
-                        'reading', 'writing', 'upright' # <<< THÊM 3 HÀNH VI NÀY
+                        'reading', 'writing', 'upright'
                     }
 
-                    # 4. Lọc xung đột (giữ nguyên)
                     eye_open_time = timers.get('EYES_OPEN', 0.0)
                     eye_close_time = timers.get('EYES_CLOSING', 0.0)
                     head_straight_time = timers.get('HEAD_STRAIGHT', 0.0)
                     head_left_time = timers.get('HEAD_LEFT', 0.0)
                     head_right_time = timers.get('HEAD_RIGHT', 0.0)
 
-                    # 5. Lặp và lọc timer
                     for behavior_name, time_val in sorted(timers.items()):
                         if time_val > 0:
-                            # Lọc xung đột (giữ nguyên)
                             if behavior_name == 'EYES_OPEN' and eye_close_time > 0: continue
                             if behavior_name == 'EYES_CLOSING' and eye_open_time > 0: continue
                             if behavior_name == 'HEAD_STRAIGHT' and (head_left_time > 0 or head_right_time > 0): continue
                             if behavior_name == 'HEAD_LEFT' and head_straight_time > 0: continue
                             if behavior_name == 'HEAD_RIGHT' and head_straight_time > 0: continue
                                 
-                            # [SỬA MỚI] Logic hiển thị timer
                             is_always_show_timer = behavior_name in ALWAYS_SHOW_TIMERS
-                            
                             behavior_label_check = behavior_name.split(' ')[0] 
                             is_detected_behavior = behavior_label_check in detected_behavior_labels
 
-                            # Chỉ thêm vào nếu nó là TRẠNG THÁI (luôn hiển thị) 
-                            # HOẶC là HÀNH VI ĐANG PHÁT HIỆN
                             if is_always_show_timer or is_detected_behavior:
                                 timer_strings.append(f"{behavior_name.replace('_', ' ')} ({time_val:.1f}s)")
                     
                     timer_display_str = ", ".join(timer_strings)
 
-                    # 6. Tạo chuỗi hiển thị (giữ nguyên logic gốc của bạn)
                     final_behavior_str = ""
                     if detection_display_str and timer_display_str:
                         final_behavior_str = f"{detection_display_str} | T: [{timer_display_str}]"
                     elif detection_display_str: final_behavior_str = detection_display_str
                     elif timer_display_str: final_behavior_str = f"T: [{timer_display_str}]"
                     
-                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    # >>> [SỬA LỖI] Kết thúc tại đây <<<
-                    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    
-                    # (fs đã được lấy ở trên, an toàn nếu analysis tắt)
                     eye_txt = "NO_FACE"
                     head_txt = "N/A"
                     alerts_txt = ""
@@ -908,11 +873,9 @@ class Camera(ttk.Frame):
                         behavior_alerts = fs.get('alerts', []) if fs.get('alerts') is not None else []
                         alerts_txt = ", ".join(focus_alerts + behavior_alerts)
                     else:
-                        # (Nếu fs rỗng, gán giá trị mặc định khi không phân tích)
                         eye_txt = "N/A" 
                         head_txt = "N/A"
                         
-                    # (Logic ngắt dòng giữ nguyên)
                     row_tag = 'row_even' if (i % 2) == 0 else 'row_odd'
                     MAX_BEHAVIOR_COL_CHARS = 90
                     behavior_chunks = []
@@ -940,7 +903,6 @@ class Camera(ttk.Frame):
                 print(f"Lỗi nghiêm trọng trong khi cập nhật Treeview: {e}")
                 traceback.print_exc()
             
-            # (Đã chuyển kiểm tra 'is_running' lên đầu)
             self.after_id = self.root.after(16, self.gui_loop)
                 
         except tk.TclError as e:
@@ -951,20 +913,18 @@ class Camera(ttk.Frame):
             if self.running: print(f"gui_loop: Lỗi nghiêm trọng: {e}"); traceback.print_exc()
 
     # ===================================================================
-    # >>> CÁC HÀM MỚI ĐỂ XỬ LÝ KẾT THÚC SESSION <<<
+    # >>> SỬA LỖI: CHẠY ĐỒNG BỘ VÀ KHÔNG DÙNG THREADING CHO DB/AI <<<
     # ===================================================================
-
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    # >>> [SỬA LỖI NULL] TÁCH BIỆT HOÀN TOÀN LUỒNG AI <<<
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     def finalize_session(self):
-        """Lưu kết quả của session hiện tại vào CSDL. Được gọi bởi stop() và on_close()."""
+        """
+        Lưu kết quả của session hiện tại vào CSDL MỘT CÁCH ĐỒNG BỘ. 
+        Loại bỏ threading để đảm bảo quá trình lưu DB hoàn tất trước khi Pytest kết thúc.
+        """
         
-        # 1. Kiểm tra xem có session nào đang chạy không
+        # 1. Kiểm tra session
         if self.current_session_id is None:
             return 
         
-        # 2. Lấy session_id và reset ngay lập tức để tránh gọi lại
         session_to_finalize = self.current_session_id
         start_time_to_finalize = self.session_start_time
         students_to_finalize = self.session_appeared_students.copy()
@@ -974,129 +934,84 @@ class Camera(ttk.Frame):
         self.session_start_time = None
         self.session_appeared_students = set()
         
-        print(f"Đang kết thúc session {session_to_finalize}...")
+        print(f"Đang kết thúc session {session_to_finalize} (ĐỒNG BỘ)...")
         
-        # 3. Tính toán thời gian
+        # 2. Cập nhật thời gian kết thúc session
         end_time = datetime.now()
-        session_duration_sec = 0
-        if start_time_to_finalize:
-            session_duration_sec = time.time() - start_time_to_finalize
+        database.end_session(session_to_finalize, end_time)
+        session_duration_sec = time.time() - start_time_to_finalize if start_time_to_finalize else 0
         
-        # 4. Cập nhật bảng 'session' (end_time) - NHANH
-        try:
-            database.end_session(session_to_finalize, end_time)
-        except Exception as e:
-            print(f"Lỗi khi cập nhật end_time cho session: {e}")
-            traceback.print_exc()
-
-        # 5. Kiểm tra xem có học sinh nào không
         if not students_to_finalize:
-            print("Session kết thúc, không có học sinh nào được ghi nhận.")
+            print("Session kết thúc, không có học sinh.")
             return
 
-        # 6. HIỂN THỊ THÔNG BÁO NGAY
-        messagebox.showinfo("Đang xử lý", f"Đang lưu kết quả session {session_to_finalize} cho {len(students_to_finalize)} học sinh...\n(Ghi chú AI sẽ được xử lý ngầm)", parent=self.root)
-
-        # 7. [SỬA MỚI] Thu thập TẤT CẢ dữ liệu từ focus_manager TRƯỚC KHI BẮT ĐẦU LUỒNG
-        # Đây là bước quan trọng để tránh xung đột luồng.
-        
-        student_data_for_thread = []
-        print("Thu thập dữ liệu từ FocusManager (trên luồng chính)...")
+        # 3. Thu thập dữ liệu từ FocusManager (trên luồng chính)
+        student_data_list = []
         for student_id in students_to_finalize:
             if student_id is None: continue
             manager_id = student_id
             
             try:
-                # Lấy dữ liệu an toàn từ luồng chính
                 focus_point = self.focus_manager.get_student_score(manager_id)
                 rate = self.calculate_rate(focus_point, session_duration_sec)
                 logs = self.focus_manager.get_student_full_logs(manager_id)
                 
-                # Đóng gói dữ liệu tĩnh
-                student_data_for_thread.append({
+                student_data_list.append({
                     "student_id": student_id,
                     "focus_point": focus_point,
                     "rate": rate,
                     "logs": logs
                 })
             except Exception as e:
-                print(f"Lỗi khi thu thập dữ liệu cho student {student_id} (luồng chính): {e}")
+                print(f"Lỗi khi thu thập dữ liệu cho student {student_id}: {e}")
                 traceback.print_exc()
         
-        # 8. [SỬA MỚI] Hàm chạy ngầm, giờ chỉ nhận dữ liệu đã thu thập
-        # Nó sẽ tự gọi AI và tự cập nhật CSDL
-        def background_ai_and_db_writer_task(data_list, s_id_to_finalize):
-            print(f"Bắt đầu luồng nền để xử lý {len(data_list)} học sinh cho Session {s_id_to_finalize}.")
+        # 4. CHẠY AI VÀ DB TRÊN LUỒNG HIỆN TẠI (ĐỒNG BỘ)
+        # BỎ THÔNG BÁO message_box để luồng không bị chặn
+        print(f"Bắt đầu xử lý AI và lưu CSDL đồng bộ cho {len(student_data_list)} học sinh...")
+        
+        for data in student_data_list:
+            student_id = data["student_id"]
+            focus_point = data["focus_point"]
+            rate = data["rate"]
+            logs = data["logs"]
+            note = "Không có ghi nhận chi tiết."
             
-            for data in data_list:
-                # Lấy dữ liệu đã thu thập (an toàn)
-                student_id = data["student_id"]
-                focus_point = data["focus_point"]
-                rate = data["rate"]
-                logs = data["logs"]
-                note = "Không có ghi nhận chi tiết." # Note mặc định
+            try:
+                # 4a. Gọi AI Tóm tắt (Sẽ chặn luồng chính cho đến khi hoàn tất)
+                if logs:
+                    try:
+                        note = ai_summarizer.summarize_focus_logs(logs)
+                    except BaseException as e:
+                        print(f"Lỗi gọi AI: {e}")
+                        note = f"Lỗi AI: {str(e)}" 
+
+                # 4b. Cập nhật CSDL (Đồng bộ)
+                database.update_focus_record(
+                    session_to_finalize,
+                    student_id,
+                    focus_point,
+                    rate,
+                    note
+                )
                 
-                try:
-                    # 8a. Gọi AI (trong luồng nền)
-                    if not logs:
-                        note = "Không có ghi nhận chi tiết."
-                    else:
-                        try:
-                            print(f"Bắt đầu gọi AI cho student {student_id} (luồng nền)...")
-                            note = ai_summarizer.summarize_focus_logs(logs) # Đây là hàm duy nhất có thể gây lỗi
-                            print(f"AI hoàn tất cho student {student_id} (luồng nền). Note: {note}")
-                        except BaseException as e: # Bắt lỗi nghiêm trọng nhất
-                            print(f"Lỗi nghiêm trọng khi gọi AI cho {student_id} (luồng nền):")
-                            traceback.print_exc()
-                            note = f"Lỗi AI: {str(e)}" 
-
-                    # 8b. Cập nhật CSDL (trong luồng nền)
-                    database.update_focus_record(
-                        s_id_to_finalize,
-                        student_id,
-                        focus_point,
-                        rate,
-                        note
-                    )
-                    print(f"Đã cập nhật CSDL cho student {student_id} (luồng nền).")
-                    
-                except Exception as e:
-                    # Lỗi này là lỗi chung của vòng lặp (ví dụ update_focus_record bị lỗi)
-                    print(f"Lỗi nghiêm trọng trong vòng lặp luồng nền cho student {student_id}: {e}")
-                    traceback.print_exc()
-            
-            print(f"--- LUỒNG NỀN HOÀN TẤT (Session {s_id_to_finalize}) ---")
+            except Exception as e:
+                print(f"Lỗi lưu CSDL cho student {student_id}: {e}")
+                traceback.print_exc()
         
-        # 9. TẠO VÀ CHẠY LUỒNG NỀN
-        # (Truyền dữ liệu đã thu thập và session_id vào)
-        db_thread = threading.Thread(target=background_ai_and_db_writer_task, args=(student_data_for_thread, session_to_finalize), daemon=True)
-        db_thread.start()
-        
-        # 10. HÀM FINALIZE_SESSION KẾT THÚC NGAY LẬP TỨC
-        print(f"Đã kích hoạt luồng nền. Hàm finalize_session thoát.")
+        print(f"--- LƯU DB/AI HOÀN TẤT ĐỒNG BỘ (Session {session_to_finalize}) ---")
 
-
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    # >>> [SỬA 1] SỬA LỖI TÍNH TỈ LỆ (RATE) <<<
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # (Hàm calculate_rate giữ nguyên)
     def calculate_rate(self, score, duration_sec):
         """Tính toán rate dựa trên điểm và tỉ lệ thời gian chuẩn 45 phút."""
         
-        STANDARD_DURATION_SEC = 45 * 60 # 45 phút * 60 giây = 2700 giây
-        
+        STANDARD_DURATION_SEC = 45 * 60 
         prorated_score = score
         
-        # [SỬA] Sửa 'duration_sec > 60' thành 'duration_sec > 5'
-        # để đảm bảo các buổi học ngắn (như 58s) vẫn được tính tỉ lệ.
         if duration_sec > 5: 
             scaling_factor = STANDARD_DURATION_SEC / duration_sec
             prorated_score = score * scaling_factor
-            print(f"Student ID: {score}, Thời gian: {duration_sec:.1f}s, Điểm gốc: {score}, Điểm tỉ lệ (45p): {prorated_score:.2f}")
-        else:
-            # Nếu buổi học quá ngắn, không tỉ lệ
-            print(f"Student ID: {score}, Thời gian quá ngắn (< 5s), dùng điểm gốc: {score}")
-
-        # (Ngưỡng điểm giữ nguyên như bạn đã chấp nhận)
+        
         if prorated_score >= 12:
             return 'Cao độ'
         elif prorated_score >= 9:
@@ -1106,16 +1021,7 @@ class Camera(ttk.Frame):
         else:
             return 'Thấp'
 
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    # >>> [SỬA 2] XÓA HÀM CŨ <<<
-    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    # (Đã xóa hàm 'generate_note_from_logs' ở đây)
-
-
-    # ===================================================================
-    # CÁC HÀM CÒN LẠI (Không thay đổi)
-    # ===================================================================
-    
+    # (Các hàm khác như enroll_one, on_click_face, toggle_record, on_close... giữ nguyên)
     def enroll_one(self):
         # (Hàm này giữ nguyên)
         with self.det_lock:
@@ -1198,7 +1104,7 @@ class Camera(ttk.Frame):
             
         self.sticky={'box':box, 'name':name, 'id': new_student_id, 'ttl':30}
         self.force_recog_frames=20
-    
+
     def _open_writer(self, path, fps):
         # (Hàm này giữ nguyên)
         fourcc=cv2.VideoWriter_fourcc(*'mp4v')
@@ -1231,7 +1137,6 @@ class Camera(ttk.Frame):
             self._close_writer(); self.recording=False
             self.set_status(f"Đã dừng ghi. Lưu tại: {self.out_path}")
 
-    # (Hàm on_close_app giữ nguyên)
     def on_close_app(self):
         if messagebox.askokcancel("Thoát", "Bạn có chắc muốn thoát ứng dụng?"):
             print("Đang đóng ứng dụng (từ nút X)...")
@@ -1244,7 +1149,6 @@ class Camera(ttk.Frame):
                 except Exception as e:
                     print(f"Lỗi khi destroy root: {e}")
 
-    # (Hàm on_close giữ nguyên)
     def on_close(self, force=False): 
         try:
             if force: 
@@ -1256,7 +1160,6 @@ class Camera(ttk.Frame):
                 print(f"Lỗi khi finalize_session trong on_close: {e}")
                 traceback.print_exc()
 
-            # (Phần còn lại giữ nguyên)
             self.running = False 
             
             # (# === SỬA ĐỔI 6: Đảm bảo cờ tắt khi đóng ===)

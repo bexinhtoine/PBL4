@@ -2,28 +2,39 @@ import google.generativeai as genai
 import os
 import traceback
 
-# !!! QUAN TRỌNG: Dán API Key của bạn vào đây
-# (Cách tốt hơn là dùng biến môi trường, nhưng để đơn giản, 
-# bạn có thể dán trực tiếp vào đây)
+# --- 1. CẤU HÌNH API & MODEL ---
+
+# !!! LƯU Ý BẢO MẬT: API Key này hiện đang hiển thị trực tiếp trong code. 
+# Nếu bạn chia sẻ code này (vd: lên GitHub), hãy xóa key hoặc dùng biến môi trường.
+GEMINI_API_KEY = "DAN API KEY VAOÀO DĐAÂY"
+
 try:
-    # (Tùy chọn: Thử lấy từ biến môi trường trước)
-    GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-    if not GOOGLE_API_KEY:
-        # Nếu không có, dùng key bạn dán vào
-        GOOGLE_API_KEY = "DAN API VAO DAY" # <--- !!! THAY THẾ CHỖ NÀY
-        
-    genai.configure(api_key=GOOGLE_API_KEY)
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+    else:
+        print("CẢNH BÁO: GEMINI_API_KEY đang trống.")
 except Exception as e:
-    print(f"Lỗi cấu hình Google AI. Hãy chắc chắn bạn đã cài đặt thư viện và dán API Key. Lỗi: {e}")
-    genai = None
+    print(f"Lỗi cấu hình API Key: {e}")
 
-# Cấu hình model (dùng Flash cho tốc độ)
+# Cấu hình tham số sinh văn bản (Temperature, Token limit, v.v.)
+generation_config = {
+    'temperature': 0.1,      # Độ sáng tạo thấp (0.1) giúp kết quả ổn định, ít bịa đặt
+    'top_p': 0.8,
+    'top_k': 40,
+    'max_output_tokens': 8192,
+}
+
+# Khởi tạo model với cấu hình đã thiết lập
 try:
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-
+    model = genai.GenerativeModel(
+        model_name='gemini-2.0-flash', # Hoặc dùng 'gemini-1.5-flash'
+        generation_config=generation_config   # <--- ĐÃ THÊM CẤU HÌNH VÀO ĐÂY
+    )
 except Exception as e:
     print(f"Không thể khởi tạo model Gemini: {e}")
     model = None
+
+# --- 2. CÁC HÀM XỬ LÝ ---
 
 def summarize_focus_logs(logs_list):
     """
@@ -43,15 +54,17 @@ def summarize_focus_logs(logs_list):
     try:
         for item in logs_list:
             if isinstance(item, (list, tuple)) and len(item) >= 3:
+                # Giả sử format là (timestamp, lý do, điểm thay đổi)
                 (ts, reason, change) = item[:3]
                 op = "+" if change > 0 else ""
                 log_strings.append(f"{reason} ({op}{change})")
             else:
                 log_strings.append(str(item))
+        
         log_input_text = ", ".join(log_strings)
     except Exception as e:
         print(f"Lỗi khi xử lý log_list: {e}")
-        log_input_text = str(logs_list) # Gửi thô
+        log_input_text = str(logs_list) # Gửi thô nếu lỗi format
 
     if not log_input_text:
         return "Không có ghi nhận chi tiết."
@@ -73,25 +86,17 @@ def summarize_focus_logs(logs_list):
     # 3. Gọi API
     try:
         response = model.generate_content(prompt)
-        
-        # In ra để debug (bạn có thể xóa sau)
-        # print(f"-> Gemini Prompt: {prompt}")
-        # print(f"-> Gemini Response: {response.text}")
-        
         return response.text.strip()
         
     except Exception as e:
         print(f"Lỗi khi gọi Gemini API: {e}")
         traceback.print_exc()
-        # Trả về log thô nếu API lỗi
-        # [SỬA] Chuyển str(e) thành chuỗi để tránh lỗi [WinError 6]
         error_message = str(e)
         return f"Lỗi API: {error_message}. Logs: {log_input_text[:500]}..."
 
-# --- Hàm test (chạy file này trực tiếp để kiểm tra) ---
+# --- 3. HÀM TEST (Chạy trực tiếp) ---
 if __name__ == "__main__":
-    print("Đang kiểm tra AI Summarizer...")
-    # Giả lập 2 trường hợp
+    print("Đang kiểm tra AI Summarizer với Config mới...")
     
     # TH1: Có log
     test_logs = [
