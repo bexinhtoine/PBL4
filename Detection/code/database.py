@@ -490,3 +490,206 @@ def update_focus_record(session_id, student_id, focus_point, rate, note):
         if cursor: cursor.close() # [SỬA] Thêm
         if conn:
             conn.close()
+
+# ===================================================================
+# CÁC HÀM THỐNG KÊ
+# ===================================================================
+
+def get_top_students_by_class(class_name, days=None, limit=20):
+    """
+    Lấy danh sách top học sinh xuất sắc trong lớp
+    
+    Args:
+        class_name: Tên lớp
+        days: Số ngày tính từ hiện tại (None = tất cả)
+        limit: Số lượng học sinh trả về
+    
+    Returns:
+        List of dict chứa thông tin học sinh và điểm số
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return []
+        cursor = conn.cursor(dictionary=True)
+        
+        # Tính toán khoảng thời gian
+        date_filter = ""
+        params = [class_name]
+        if days:
+            from datetime import datetime, timedelta
+            start_date = datetime.now() - timedelta(days=days)
+            date_filter = "AND s.start_time >= %s"
+            params.append(start_date)
+        
+        params.append(limit)
+        
+        query = f"""
+        SELECT 
+            st.student_id,
+            st.name,
+            st.gender,
+            COUNT(DISTINCT f.seasion_id) as total_sessions,
+            ROUND(AVG(CASE WHEN f.appear = 1 THEN f.focus_point ELSE NULL END), 1) as avg_focus,
+            ROUND(SUM(CASE WHEN f.appear = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as attendance_rate,
+            SUM(CASE WHEN f.rate = 'Cao độ' THEN 1 ELSE 0 END) as count_cao_do,
+            SUM(CASE WHEN f.rate = 'Tốt' THEN 1 ELSE 0 END) as count_tot,
+            SUM(CASE WHEN f.rate = 'Trung bình' THEN 1 ELSE 0 END) as count_trung_binh,
+            SUM(CASE WHEN f.rate = 'Thấp' THEN 1 ELSE 0 END) as count_thap
+        FROM student st
+        LEFT JOIN focus_record f ON st.student_id = f.student_id
+        LEFT JOIN seasion s ON f.seasion_id = s.seasion_id
+        WHERE st.class_name = %s {date_filter}
+        GROUP BY st.student_id, st.name, st.gender
+        HAVING total_sessions > 0
+        ORDER BY avg_focus DESC, attendance_rate DESC
+        LIMIT %s
+        """
+        
+        cursor.execute(query, params)
+        students = cursor.fetchall()
+        return students
+        
+    except Error as e:
+        print(f"Lỗi khi lấy top học sinh: {e}")
+        return []
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+def get_class_statistics(class_name, days=None):
+    """
+    Lấy thống kê tổng quan của lớp
+    
+    Args:
+        class_name: Tên lớp
+        days: Số ngày tính từ hiện tại (None = tất cả)
+    
+    Returns:
+        Dict chứa các số liệu thống kê
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return None
+        cursor = conn.cursor(dictionary=True)
+        
+        # Tính toán khoảng thời gian
+        date_filter = ""
+        params = [class_name]
+        if days:
+            from datetime import datetime, timedelta
+            start_date = datetime.now() - timedelta(days=days)
+            date_filter = "AND s.start_time >= %s"
+            params.append(start_date)
+        
+        query = f"""
+        SELECT 
+            COUNT(DISTINCT s.seasion_id) as total_sessions,
+            COUNT(DISTINCT st.student_id) as total_students,
+            COUNT(CASE WHEN f.appear = 1 THEN 1 END) as total_attendance,
+            COUNT(f.record_id) as total_records,
+            ROUND(AVG(CASE WHEN f.appear = 1 THEN f.focus_point ELSE NULL END), 1) as avg_focus_all,
+            ROUND(MAX(CASE WHEN f.appear = 1 THEN f.focus_point ELSE NULL END), 1) as max_focus,
+            ROUND(MIN(CASE WHEN f.appear = 1 THEN f.focus_point ELSE NULL END), 1) as min_focus,
+            COUNT(CASE WHEN f.rate = 'Cao độ' THEN 1 END) as count_cao_do,
+            COUNT(CASE WHEN f.rate = 'Tốt' THEN 1 END) as count_tot,
+            COUNT(CASE WHEN f.rate = 'Trung bình' THEN 1 END) as count_trung_binh,
+            COUNT(CASE WHEN f.rate = 'Thấp' THEN 1 END) as count_thap
+        FROM seasion s
+        LEFT JOIN focus_record f ON s.seasion_id = f.seasion_id
+        LEFT JOIN student st ON f.student_id = st.student_id AND st.class_name = s.class_name
+        WHERE s.class_name = %s {date_filter}
+        """
+        
+        cursor.execute(query, params)
+        stats = cursor.fetchone()
+        return stats
+        
+    except Error as e:
+        print(f"Lỗi khi lấy thống kê lớp: {e}")
+        return None
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+def get_student_detail_stats(student_id, days=None):
+    """
+    Lấy thống kê chi tiết của một học sinh
+    
+    Args:
+        student_id: ID học sinh
+        days: Số ngày tính từ hiện tại (None = tất cả)
+    
+    Returns:
+        Dict chứa thông tin chi tiết
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return None
+        cursor = conn.cursor(dictionary=True)
+        
+        # Tính toán khoảng thời gian
+        date_filter = ""
+        params = [student_id]
+        if days:
+            from datetime import datetime, timedelta
+            start_date = datetime.now() - timedelta(days=days)
+            date_filter = "AND s.start_time >= %s"
+            params.append(start_date)
+        
+        query = f"""
+        SELECT 
+            st.name,
+            st.class_name,
+            st.gender,
+            COUNT(DISTINCT f.seasion_id) as total_sessions,
+            SUM(CASE WHEN f.appear = 1 THEN 1 ELSE 0 END) as sessions_present,
+            ROUND(AVG(CASE WHEN f.appear = 1 THEN f.focus_point ELSE NULL END), 1) as avg_focus,
+            ROUND(MAX(CASE WHEN f.appear = 1 THEN f.focus_point ELSE NULL END), 1) as max_focus,
+            ROUND(MIN(CASE WHEN f.appear = 1 THEN f.focus_point ELSE NULL END), 1) as min_focus,
+            SUM(CASE WHEN f.rate = 'Cao độ' THEN 1 ELSE 0 END) as count_cao_do,
+            SUM(CASE WHEN f.rate = 'Tốt' THEN 1 ELSE 0 END) as count_tot,
+            SUM(CASE WHEN f.rate = 'Trung bình' THEN 1 ELSE 0 END) as count_trung_binh,
+            SUM(CASE WHEN f.rate = 'Thấp' THEN 1 ELSE 0 END) as count_thap
+        FROM student st
+        LEFT JOIN focus_record f ON st.student_id = f.student_id
+        LEFT JOIN seasion s ON f.seasion_id = s.seasion_id
+        WHERE st.student_id = %s {date_filter}
+        GROUP BY st.student_id, st.name, st.class_name, st.gender
+        """
+        
+        cursor.execute(query, params)
+        stats = cursor.fetchone()
+        return stats
+        
+    except Error as e:
+        print(f"Lỗi khi lấy thống kê học sinh: {e}")
+        return None
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+def get_all_classes():
+    """Lấy danh sách tất cả các lớp"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None: return []
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT DISTINCT class_name FROM student ORDER BY class_name")
+        classes = [row[0] for row in cursor.fetchall()]
+        return classes
+        
+    except Error as e:
+        print(f"Lỗi khi lấy danh sách lớp: {e}")
+        return []
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
