@@ -128,6 +128,19 @@ class HomeFrame(tk.Frame):
         )
         btn_students.grid(row=3, column=0, padx=20, pady=15)
         
+        # Nút Thống kê
+        btn_statistics = tk.Button(
+            buttons_frame,
+            text="📊 THỐNG KÊ",
+            bg='#9b59b6',
+            fg='black',
+            activebackground='#8e44ad',
+            activeforeground='black',
+            command=lambda: self.on_navigate('thongke'),
+            **button_style
+        )
+        btn_statistics.grid(row=4, column=0, padx=20, pady=15)
+        
         # === FOOTER ===
         footer_frame = tk.Frame(self, bg='#34495e', height=40)
         footer_frame.pack(fill=tk.X, side=tk.BOTTOM)
@@ -147,6 +160,7 @@ class HomeFrame(tk.Frame):
         self.add_hover_effects(btn_create_session, '#27ae60', '#229954')
         self.add_hover_effects(btn_history, '#e74c3c', '#c0392b')
         self.add_hover_effects(btn_students, '#f39c12', '#d68910')
+        self.add_hover_effects(btn_statistics, '#9b59b6', '#8e44ad')
     
     def add_hover_effects(self, button, normal_color, hover_color):
         """Thêm hiệu ứng hover cho nút"""

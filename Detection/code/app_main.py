@@ -14,6 +14,7 @@ try:
     from hocsinh import HocSinhFrame
     from chitiet import ChiTietFrame
     from camera import Camera
+    from thongke import ThongKeFrame
 except ImportError as e:
     # Cần tạo root tạm thời để hiển thị lỗi
     root_err = tk.Tk()
@@ -187,6 +188,17 @@ class MainApplication:
             # Tự động quay về trang chủ một cách an toàn
             self.show_home()
     
+    def show_thongke(self):
+        """Hiển thị màn hình thống kê"""
+        print("Hiển thị màn hình thống kê...")
+        
+        self._safe_cleanup_current_frame(target_page="thongke")
+        
+        # Tạo và hiển thị ThongKeFrame
+        self.current_frame = ThongKeFrame(self.root, self.user_info, self.navigate)
+        self.current_frame.pack(fill=tk.BOTH, expand=True)
+        self.root.title("Hệ thống Giám sát ATT - Thống kê")
+    
     def navigate(self, page_name):
         """
         Hàm điều hướng chung cho tất cả các frame
@@ -199,6 +211,8 @@ class MainApplication:
             self.show_hocsinh()
         elif page_name == 'camera':
             self.show_camera()
+        elif page_name == 'thongke':
+            self.show_thongke()
         else:
             print(f"Trang không xác định: {page_name}")
     
